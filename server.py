@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 import requests
 
-app = FastAPI(title="TatraMeteo Skialp & Avalanche Pro Core")
+app = FastAPI(title="Meteoportal Avalanche Pro Core - avalanche.sk")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,21 +29,29 @@ def get_elevation(lat, lon):
 
 
 def get_terrain_derivatives(lat, lon):
+  """Vypočíta sklon a správny azimut expozície (smer klesania svahu nadol).
+
+  0° = Sever, 90° = Východ, 180° = Juh, 270° = Západ.
+  """
   d_deg = 0.0015
   elev_n = get_elevation(lat + d_deg, lon)
   elev_s = get_elevation(lat - d_deg, lon)
   elev_e = get_elevation(lat, lon + d_deg)
   elev_w = get_elevation(lat, lon - d_deg)
 
-  dz_dx = (elev_e - elev_w) / (2 * 120.0)
-  dz_dy = (elev_n - elev_s) / (2 * 150.0)
+  # Parciálne derivácie klesania terénu (downslope direction)
+  # dz_dx > 0 znamená, že smerom na východ terén klesá
+  # dz_dy > 0 znamená, že smerom na sever terén klesá
+  dz_dx = (elev_w - elev_e) / (2 * 120.0)
+  dz_dy = (elev_s - elev_n) / (2 * 150.0)
 
   slope_rad = math.atan(math.sqrt(dz_dx**2 + dz_dy**2))
-  aspect_rad = math.atan2(-dz_dx, dz_dy)
+  slope_deg = round(math.degrees(slope_rad), 1)
 
-  return round(math.degrees(slope_rad), 1), round(
-      (math.degrees(aspect_rad) + 360) % 360, 1
-  )
+  aspect_rad = math.atan2(dz_dx, dz_dy)
+  aspect_deg = round((math.degrees(aspect_rad) + 360) % 360, 1)
+
+  return slope_deg, aspect_deg
 
 
 @app.get("/api/forecast")
@@ -70,7 +78,6 @@ def get_pro_avalanche_forecast(lat: float, lon: float):
           "wind_gusts_10m",
           "direct_radiation",
           "diffuse_radiation",
-          "direct_normal_irradiance",
           "shortwave_radiation_instant",
       ],
       "wind_speed_unit": "ms",
@@ -80,7 +87,7 @@ def get_pro_avalanche_forecast(lat: float, lon: float):
 
   res = requests.get(url, params=params, timeout=10)
   if res.status_code != 200:
-    raise HTTPException(status_code=500, detail="Chyba modelu.")
+    raise HTTPException(status_code=500, detail="Chyba komunikácie s modelom.")
 
   h = res.json()["hourly"]
   time_series = h["time"]
@@ -97,27 +104,44 @@ def get_pro_avalanche_forecast(lat: float, lon: float):
     snow = h["snowfall"][i]
     frz_lvl = h.get("freezing_level_height", [0] * len(time_series))[i]
 
-    # Solárne žiarenie
+    # Solárne žiarenie (W/m2)
     direct_rad = h.get("direct_radiation", [0] * len(time_series))[i]
     diffuse_rad = h.get("diffuse_radiation", [0] * len(time_series))[i]
-    dni = h.get("direct_normal_irradiance", [0] * len(time_series))[i]
     total_rad = round(direct_rad + diffuse_rad, 1)
 
-    # Prepočet insolácie na orientovaný svah
-    # Južné a JZ/JV svahy (90° až 270°) absorbujú maximum priamej radiácie
-    hour = datetime.fromisoformat(time_series[i]).hour
-    solar_azimuth = (
-        (hour - 12) * 15 + 180
-    ) % 360  # Približný azimut slnka podľa hodiny
-    aspect_diff = math.radians((aspect - solar_azimuth + 180) % 360 - 180)
-    aspect_solar_factor = max(0.1, math.cos(aspect_diff)) if direct_rad > 0 else 0.5
+    # Výpočet azimutu a výšky slnka
+    dt = datetime.fromisoformat(time_series[i])
+    hour = dt.hour
+    solar_azimuth = ((hour - 12) * 15 + 180) % 360
 
-    # Efektívna radiácia na konkrétny svah
-    effective_slope_radiation = round(
-        diffuse_rad + (direct_rad * aspect_solar_factor * (1.0 + slope_rad * 0.4)),
-        1,
-    )
+    # Solárna elevácia nad horizontom (leto/zima priemerný profil)
+    if 5 <= hour <= 20:
+      solar_elevation_deg = max(
+          0.0, 58.0 * math.sin(math.radians((hour - 5) * (180.0 / 15.0)))
+      )
+    else:
+      solar_elevation_deg = 0.0
 
+    # Rozdiel azimutu svahu a slnka
+    diff_angle = math.radians(abs((aspect - solar_azimuth + 180) % 360 - 180))
+
+    # Skutočná insolácia na orientovaný svah
+    if direct_rad > 5.0 and solar_elevation_deg > 1.0:
+      if diff_angle < math.radians(90):
+        # Priamy dopad lúčov na sklonený svah
+        cos_inc = math.cos(diff_angle) * math.cos(
+            math.radians(slope - (90.0 - solar_elevation_deg))
+        )
+        direct_slope_rad = max(0.0, direct_rad * max(0.0, cos_inc))
+      else:
+        # Svah je odvrátený od slnka (tieň)
+        direct_slope_rad = 0.0
+    else:
+      direct_slope_rad = 0.0
+
+    effective_slope_radiation = round(diffuse_rad + direct_slope_rad, 1)
+
+    # Orografický vietor a Venturiho efekt
     angle_diff = math.radians((w_dir - aspect + 180) % 360 - 180)
     cos_val = math.cos(angle_diff)
 
@@ -125,6 +149,7 @@ def get_pro_avalanche_forecast(lat: float, lon: float):
     wind_mult = max(0.4, round(venturi * (1.0 + 0.30 * cos_val * slope_rad), 2))
     local_wind_ms = round(w_ms * wind_mult, 1)
 
+    # Orografické zrážky
     p_mult = (
         min(
             2.8,
@@ -139,6 +164,7 @@ def get_pro_avalanche_forecast(lat: float, lon: float):
     loc_precip = round(precip * p_mult, 2)
     loc_snow = round(snow * p_mult, 2)
 
+    # Wind Drift Index (tvorba doskového snehu)
     wdi = (
         min(
             1.0,
@@ -154,12 +180,8 @@ def get_pro_avalanche_forecast(lat: float, lon: float):
         else 0.0
     )
 
-    # Slnečné lavínové riziko: Teplota > -1°C a efektívna radiácia > 350 W/m²
-    wet_risk = (
-        t >= -1.0
-        and effective_slope_radiation > 350
-        and (90 <= aspect <= 270)
-    )
+    # Riziko mokrých lavín: Teplota okolo 0°C a vysoká radiácia na svah
+    wet_risk = t >= -1.0 and effective_slope_radiation > 350
     swe = round(loc_snow * 0.1, 2) if loc_snow > 0 else 0.0
 
     timeline.append({
@@ -171,28 +193,4 @@ def get_pro_avalanche_forecast(lat: float, lon: float):
         "cloud_mid": h["cloud_cover_mid"][i],
         "cloud_high": h["cloud_cover_high"][i],
         "rain_mm": max(0.0, round(loc_precip - loc_snow, 2)),
-        "snow_cm": loc_snow,
-        "local_wind_ms": local_wind_ms,
-        "local_wind_kmh": round(local_wind_ms * 3.6, 1),
-        "gusts_ms": round(h["wind_gusts_10m"][i] * max(1.0, wind_mult), 1),
-        "wind_dir_deg": w_dir,
-        "direct_rad": direct_rad,
-        "diffuse_rad": diffuse_rad,
-        "total_rad": total_rad,
-        "slope_rad": effective_slope_radiation,
-        "wdi": wdi,
-        "wet_risk": wet_risk,
-        "swe": swe,
-        "precip_mult": round(p_mult, 2),
-    })
-
-  return {
-      "lat": round(lat, 5),
-      "lon": round(lon, 5),
-      "elevation_m": round(elevation),
-      "slope_deg": slope,
-      "aspect_deg": aspect,
-      "snow_24h_cm": round(sum(t["snow_cm"] for t in timeline[:24]), 1),
-      "time_steps": time_series,
-      "timeline": timeline,
-  }
+    
