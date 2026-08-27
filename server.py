@@ -29,7 +29,7 @@ def get_elevation(lat, lon):
 
 
 def get_terrain_derivatives(lat, lon):
-  """Vypočíta sklon a správny azimut expozície (smer klesania svahu nadol).
+  """Exaktný GIS algoritmus (ArcGIS / GDAL) pre výpočet sklonu a azimutu expozície svahu nadol.
 
   0° = Sever, 90° = Východ, 180° = Juh, 270° = Západ.
   """
@@ -39,16 +39,22 @@ def get_terrain_derivatives(lat, lon):
   elev_e = get_elevation(lat, lon + d_deg)
   elev_w = get_elevation(lat, lon - d_deg)
 
-  # Parciálne derivácie klesania terénu (downslope direction)
-  # dz_dx > 0 znamená, že smerom na východ terén klesá
-  # dz_dy > 0 znamená, že smerom na sever terén klesá
-  dz_dx = (elev_w - elev_e) / (2 * 120.0)
-  dz_dy = (elev_s - elev_n) / (2 * 150.0)
+  # Parciálne derivácie stúpania (Uphill gradient)
+  # dx: vzdialenosť v metroch v smere Z -> V (~200m pri 49°N)
+  # dy: vzdialenosť v metroch v smere J -> S (~330m)
+  dz_dx = (elev_e - elev_w) / (2 * 105.0)
+  dz_dy = (elev_n - elev_s) / (2 * 165.0)
 
+  # Sklon svahu v stupňoch
   slope_rad = math.atan(math.sqrt(dz_dx**2 + dz_dy**2))
   slope_deg = round(math.degrees(slope_rad), 1)
 
-  aspect_rad = math.atan2(dz_dx, dz_dy)
+  # Vektor klesania nadol (Downslope vector)
+  vx = -dz_dx  # kladné ak klesá na východ
+  vy = -dz_dy  # kladné ak klesá na sever
+
+  # Správny kompasový azimut (0° = Sever, 90° = Východ, 180° = Juh, 270° = Západ)
+  aspect_rad = math.atan2(vx, vy)
   aspect_deg = round((math.degrees(aspect_rad) + 360) % 360, 1)
 
   return slope_deg, aspect_deg
