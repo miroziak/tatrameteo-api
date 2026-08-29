@@ -135,11 +135,11 @@ def fetch_and_store_current_hour():
                 h = res.json()["hourly"]
                 times = h["time"]
 
-                # Uložime prvý záznam z predpovede (alebo aktuálnu hodinu, ak existuje)
+                # Nájdeme presnú zhodu s aktuálnou hodinou
+                target_hour_str = now.strftime("%Y-%m-%dT%H:00")
                 idx = 0
                 for i, t_val in enumerate(times):
-                    # Nájdeme index, ktorý zodpovedá aktuálnej hodine alebo najbližšiemu času
-                    if now.strftime("%Y-%m-%d %H") in t_val:
+                    if target_hour_str in t_val:
                         idx = i
                         break
 
