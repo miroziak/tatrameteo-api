@@ -3,7 +3,6 @@ import os
 import psycopg2
 import requests
 
-# Zoznam všetkých tatranských bodov a sediel
 ALL_TATRA_POINTS = [
     {
         "name": "Gerlachovský štít",
@@ -65,22 +64,19 @@ ALL_TATRA_POINTS = [
         "lat": 49.1908,
         "lon": 20.2008,
     },
-    # (Môžeš sem doplniť aj všetky ostatné body zo zoznamu)
 ]
 
-# Pripojovací reťazec z Renderu (najlepšie je ho čítať cez premennú prostredia)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 
 def get_connection():
-  return psycopg2.connect(DATABASE_URL, sslmode="require")
+    return psycopg2.connect(DATABASE_URL, sslmode="require")
 
 
 def init_db():
-  """Inicializuje PostgreSQL tabuľku s unikátnym kľúčom proti duplicitám."""
-  conn = get_connection()
-  cursor = conn.cursor()
-  cursor.execute("""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS weather_history (
             id SERIAL PRIMARY KEY,
             point_name TEXT,
@@ -98,94 +94,99 @@ def init_db():
             UNIQUE(latitude, longitude, forecast_time)
         )
     """)
-  conn.commit()
-  cursor.close()
-  conn.close()
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 
 def fetch_and_store_current_hour():
-  init_db()
-  conn = get_connection()
-  cursor = conn.cursor()
+    init_db()
+    conn = get_connection()
+    cursor = conn.cursor()
 
-  now = datetime.now()
-  current_hour_str = now.strftime("%Y-%m-%dT%H:00:00")
-  now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now()
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
-  print(
-      f"[{now_str}] Sťahujem dáta pre {len(ALL_TATRA_POINTS)} bodov"
-      f" ({current_hour_str})..."
-  )
+    print(f"[{now_str}] Sťahujem dáta pre {len(ALL_TATRA_POINTS)} bodov...")
 
-  for pt in ALL_TATRA_POINTS:
-    lat, lon = pt["lat"], pt["lon"]
-    url = "https://api.open-meteo.com/v1/dwd-icon"
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "hourly": [
-            "temperature_2m",
-            "freezing_level_height",
-            "precipitation",
-            "snowfall",
-            "wind_speed_10m",
-            "wind_direction_10m",
-            "wind_gusts_10m",
-        ],
-        "wind_speed_unit": "ms",
-        "timezone": "Europe/Bratislava",
-        "forecast_days": 1,
-    }
+    for pt in ALL_TATRA_POINTS:
+        lat, lon = pt["lat"], pt["lon"]
+        url = "https://api.open-meteo.com/v1/dwd-icon"
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "hourly": [
+                "temperature_2m",
+                "freezing_level_height",
+                "precipitation",
+                "snowfall",
+                "wind_speed_10m",
+                "wind_direction_10m",
+                "wind_gusts_10m",
+            ],
+            "wind_speed_unit": "ms",
+            "timezone": "Europe/Bratislava",
+            "forecast_days": 1,
+        }
 
-    try:
-      res = requests.get(url, params=params, timeout=10)
-      if res.status_code == 200:
-        h = res.json()["hourly"]
-        times = h["time"]
+        try:
+            res = requests.get(url, params=params, timeout=10)
+            if res.status_code == 200:
+                h = res.json()["hourly"]
+                times = h["time"]
 
-        if current_hour_str in times:
-          idx = times.index(current_hour_str)
-          # PostgreSQL ekvivalent pre INSERT OR REPLACE je INSERT ... ON CONFLICT
-          cursor.execute(
-              """
-                        INSERT INTO weather_history 
-                        (point_name, latitude, longitude, forecast_time, recorded_at, temperature, precipitation, snowfall, wind_speed, wind_gusts, wind_direction, freezing_level)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (latitude, longitude, forecast_time) 
-                        DO UPDATE SET 
-                            temperature = EXCLUDED.temperature,
-                            precipitation = EXCLUDED.precipitation,
-                            snowfall = EXCLUDED.snowfall,
-                            wind_speed = EXCLUDED.wind_speed,
-                            wind_gusts = EXCLUDED.wind_gusts,
-                            wind_direction = EXCLUDED.wind_direction,
-                            freezing_level = EXCLUDED.freezing_level,
-                            recorded_at = EXCLUDED.recorded_at;
-                    """,
-              (
-                  pt["name"],
-                  lat,
-                  lon,
-                  times[idx],
-                  now_str,
-                  h["temperature_2m"][idx],
-                  h["precipitation"][idx],
-                  h["snowfall"][idx],
-                  h["wind_speed_10m"][idx],
-                  h["wind_gusts_10m"][idx],
-                  h["wind_direction_10m"][idx],
-                  h["freezing_level_height"][idx],
-              ),
-          )
-          conn.commit()
-          print(f"  -> Uložené do PostgreSQL: {pt['name']}")
-    except Exception as e:
-      print(f"  ❌ Chyba pre {pt['name']}: {e}")
+                # Uložime prvý záznam z predpovede (alebo aktuálnu hodinu, ak existuje)
+                idx = 0
+                for i, t_val in enumerate(times):
+                    # Nájdeme index, ktorý zodpovedá aktuálnej hodine alebo najbližšiemu času
+                    if now.strftime("%Y-%m-%d %H") in t_val:
+                        idx = i
+                        break
 
-  cursor.close()
-  conn.close()
-  print("Zber úspešne dokončený.")
+                cursor.execute(
+                    """
+                    INSERT INTO weather_history 
+                    (point_name, latitude, longitude, forecast_time, recorded_at, temperature, precipitation, snowfall, wind_speed, wind_gusts, wind_direction, freezing_level)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (latitude, longitude, forecast_time) 
+                    DO UPDATE SET 
+                        temperature = EXCLUDED.temperature,
+                        precipitation = EXCLUDED.precipitation,
+                        snowfall = EXCLUDED.snowfall,
+                        wind_speed = EXCLUDED.wind_speed,
+                        wind_gusts = EXCLUDED.wind_gusts,
+                        wind_direction = EXCLUDED.wind_direction,
+                        freezing_level = EXCLUDED.freezing_level,
+                        recorded_at = EXCLUDED.recorded_at;
+                """,
+                    (
+                        pt["name"],
+                        lat,
+                        lon,
+                        times[idx],
+                        now_str,
+                        h["temperature_2m"][idx],
+                        h["precipitation"][idx],
+                        h["snowfall"][idx],
+                        h["wind_speed_10m"][idx],
+                        h["wind_gusts_10m"][idx],
+                        h["wind_direction_10m"][idx],
+                        h["freezing_level_height"][idx],
+                    ),
+                )
+                conn.commit()
+                print(f"  -> Uložené do PostgreSQL: {pt['name']} ({times[idx]})")
+            else:
+                print(
+                    f"  ❌ API vrátilo status {res.status_code} pre {pt['name']}"
+                )
+        except Exception as e:
+            print(f"  ❌ Chyba pre {pt['name']}: {e}")
+
+    cursor.close()
+    conn.close()
+    print("Zber úspešne dokončený.")
 
 
 if __name__ == "__main__":
-  fetch_and_store_current_hour()
+    fetch_and_store_current_hour()
