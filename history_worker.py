@@ -109,7 +109,7 @@ def fetch_and_store_current_hour():
   cursor = conn.cursor()
 
   now = datetime.now()
-  current_hour_str = now.strftime("%Y-%m-%d %H:00:00")
+  current_hour_str = now.strftime("%Y-%m-%dT%H:00:00")
   now_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
   print(
