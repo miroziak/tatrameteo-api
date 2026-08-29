@@ -168,13 +168,27 @@ def debug_database():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT point_name, forecast_time, temperature, wind_speed, recorded_at FROM weather_history ORDER BY recorded_at DESC LIMIT 20")
-        rows = cursor.fetchall()
+        
+        # 1. Overíme, aké tabuľky existujú v databáze
+        cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public';")
+        tables = [t[0] for t in cursor.fetchall()]
+        
+        # 2. Skúsime vytiahnuť dáta z weather_history, ak tabuľka existuje
+        rows = []
+        if "weather_history" in tables:
+            cursor.execute("SELECT point_name, forecast_time, temperature, wind_speed, recorded_at FROM weather_history ORDER BY recorded_at DESC LIMIT 20")
+            rows = cursor.fetchall()
+            
         cursor.close()
         conn.close()
-        return {"status": "success", "latest_records": rows}
+        return {
+            "status": "success", 
+            "tables_in_db": tables, 
+            "latest_records": rows
+        }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+        
 @app.get("/api/history")
 def get_point_history(lat: float, lon: float):
     """Vráti historické dáta pre daný bod z PostgreSQL databázy na Renderi."""
