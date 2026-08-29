@@ -155,7 +155,15 @@ def get_pro_avalanche_forecast(lat: float, lon: float):
         "snow_24h_cm": round(sum(t["snow_cm"] for t in timeline[:24]), 1),
         "time_steps": time_series, "timeline": timeline
     }
-
+@app.get("/api/debug-db")
+def debug_database():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT point_name, forecast_time, temperature, wind_speed, recorded_at FROM weather_history ORDER BY recorded_at DESC LIMIT 20")
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return {"latest_records": rows}
 @app.post("/api/analyze-gpx")
 async def analyze_gpx(file: UploadFile = File(...)):
     try:
