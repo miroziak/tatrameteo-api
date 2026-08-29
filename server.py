@@ -3,7 +3,6 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
 import requests
 import os
 import psycopg2
@@ -163,15 +162,56 @@ def get_pro_avalanche_forecast(lat: float, lon: float):
         "snow_24h_cm": round(sum(t["snow_cm"] for t in timeline[:24]), 1),
         "time_steps": time_series, "timeline": timeline
     }
+
 @app.get("/api/debug-db")
 def debug_database():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT point_name, forecast_time, temperature, wind_speed, recorded_at FROM weather_history ORDER BY recorded_at DESC LIMIT 20")
-    rows = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return {"latest_records": rows}
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT point_name, forecast_time, temperature, wind_speed, recorded_at FROM weather_history ORDER BY recorded_at DESC LIMIT 20")
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {"status": "success", "latest_records": rows}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/history")
+def get_point_history(lat: float, lon: float):
+    """Vrátí historické dáta pre daný bod z PostgreSQL databázy na Renderi."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT forecast_time, temperature, precipitation, snowfall, wind_speed, wind_gusts, wind_direction, freezing_level
+            FROM weather_history
+            WHERE ROUND(CAST(latitude AS numeric), 3) = ROUND(CAST(%s AS numeric), 3) 
+              AND ROUND(CAST(longitude AS numeric), 3) = ROUND(CAST(%s AS numeric), 3)
+            ORDER BY forecast_time ASC
+        """, (lat, lon))
+        
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        history_data = []
+        for r in rows:
+            history_data.append({
+                "time": str(r[0]),
+                "temp": r[1],
+                "precipitation": r[2],
+                "snowfall": r[3],
+                "wind_speed": r[4],
+                "wind_gusts": r[5],
+                "wind_direction": r[6],
+                "freezing_level": r[7]
+            })
+            
+        return {"lat": lat, "lon": lon, "history": history_data}
+    except Exception as e:
+        return {"lat": lat, "lon": lon, "history": [], "error": str(e)}
+
 @app.post("/api/analyze-gpx")
 async def analyze_gpx(file: UploadFile = File(...)):
     try:
@@ -202,9 +242,3 @@ async def analyze_gpx(file: UploadFile = File(...)):
         }
     except Exception as e: 
         raise HTTPException(status_code=400, detail=str(e))
-
-@app.get("/", response_class=HTMLResponse)
-def serve_page():
-    with open("index.html", "r", encoding="utf-8") as f: 
-        return f.read()
-    
