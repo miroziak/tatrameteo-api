@@ -5,6 +5,14 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 import requests
+import os
+import psycopg2
+
+def get_db_connection():
+    return psycopg2.connect(
+        os.environ.get("DATABASE_URL"),
+        sslmode="require"
+    )
 
 app = FastAPI(title="Meteoportal Avalanche Pro Core - avalanche.sk")
 
