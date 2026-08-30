@@ -252,36 +252,35 @@ def get_point_history(lat: float, lon: float):
         return {"lat": lat, "lon": lon, "history": history_data}
     except Exception as e:
         return {"lat": lat, "lon": lon, "history": [], "error": str(e)}
-@app.get("/api/stations")
-def get_stations_data():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        # Vytiahneme najnovší záznam pre každú stanicu
-        cursor.execute("""
-            SELECT DISTINCT ON (station_id) 
-                   station_id, station_name, recorded_at, temp, wind_speed, wind_direction, pressure
-            FROM station_observations
-            ORDER BY station_id, recorded_at DESC
-        """)
-        rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        
-        stations = []
-        for r in rows:
-            stations.append({
-                "station_id": r[0],
-                "name": r[1],
-                "time": str(r[2]),
-                "temp": r[3],
-                "wind_speed": r[4],
-                "wind_direction": r[5],
-                "pressure": r[6]
-            })
-        return {"stations": stations}
-    except Exception as e:
-        return {"stations": [], "error": str(e)}
+@app.route('/api/stations', methods=['GET'])
+def get_stations():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Vyberieme najnovší záznam pre každú stanicu
+    cursor.execute("""
+        SELECT DISTINCT ON (station_id) 
+               station_id, station_name, recorded_at, temp, humidity, wind_speed, wind_direction, pressure, precipitation
+        FROM station_observations
+        ORDER BY station_id, recorded_at DESC;
+    """)
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    stations = []
+    for r in rows:
+        stations.append({
+            "station_id": r[0],
+            "name": r[1],
+            "recorded_at": str(r[2]),
+            "temp": r[3],
+            "humidity": r[4],
+            "wind_speed": r[5],
+            "wind_direction": r[6],
+            "pressure": r[7],
+            "precipitation": r[8]
+        })
+    return jsonify({"stations": stations})
 @app.post("/api/analyze-gpx")
 async def analyze_gpx(file: UploadFile = File(...)):
     try:
