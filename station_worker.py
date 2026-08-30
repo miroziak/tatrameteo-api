@@ -30,7 +30,6 @@ def init_station_db():
     cursor.close()
     conn.close()
 
-# Zoznam staníc so SYNOP kódmi pre Ogimet
 STATIONS = [
     {"id": "11934", "name": "Lomnický štít", "source": "ogimet"},
     {"id": "11930", "name": "Chopok", "source": "ogimet"},
@@ -45,13 +44,12 @@ def fetch_and_parse_ogimet(station):
     station_name = station["name"]
     
     now = datetime.utcnow()
-    # URL pre stiahnutie posledných 24 hodín zo SYNOP stanice cez Ogimet
     url = f"https://www.ogimet.com/cgi-bin/getsynres?ind={station_id}&notimings=1&year={now.year}&month={now.month}&day={now.day}&hour=0&length=24"
     
     try:
         res = requests.get(url, timeout=15)
         if res.status_code != 200 or "No valid observations" in res.text:
-            print(ž:=f"Žiadne dáta pre stanicu {station_name}")
+            print(f"Žiadne dáta pre {station_name}")
             return
             
         lines = res.text.split('\n')
@@ -60,12 +58,9 @@ def fetch_and_parse_ogimet(station):
         count = 0
         
         for line in lines:
-            # Riadky s dátami z Ogimetu obsahujú čiarky a kód stanice
             if "," in line and station_id in line:
                 parts = [p.strip() for p in line.split(',')]
                 try:
-                    # Formát CSV výstupu Ogimet:
-                    # [0]: Station ID, [1]: Date Time (YYYY-MM-DD HH:MM), [2]: Temp, [3]: Td, [4]: Wind Dir, [5]: Wind Speed, ...
                     date_str = parts[1]
                     temp = float(parts[2]) if parts[2] != '' else None
                     wind_dir = float(parts[4]) if len(parts) > 4 and parts[4] != '' else None
@@ -83,21 +78,18 @@ def fetch_and_parse_ogimet(station):
                         pressure = EXCLUDED.pressure;
                     """, (station_id, station_name, date_str, temp, wind_speed, wind_dir, pressure))
                     count += 1
-                except Exception as ex:
-                    # Preskočíme riadok, ak zlyhá parcovanie niektorého stĺpca
+                except Exception:
                     continue
                     
         conn.commit()
         cursor.close()
         conn.close()
         print(f"Uložených {count} záznamov pre stanicu {station_name}.")
-        
     except Exception as e:
-        print(f"Chyba pri sťahovaní Ogimet pre {station_name}: {e}")
+        print(f"Chyba Ogimet {station_name}: {e}")
 
 if __name__ == "__main__":
     init_station_db()
     for st in STATIONS:
         if st["source"] == "ogimet":
-            print(f"Sťahujem Ogimet pre: {st['name']}...")
             fetch_and_parse_ogimet(st)
