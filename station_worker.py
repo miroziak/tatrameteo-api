@@ -50,7 +50,8 @@ def fetch_and_parse_ogimet(station):
     print(f"Sťahujem URL pre {station_name}: {url}")
     
     try:
-        res = requests.get(url, timeout=15)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        res = requests.get(url, headers=headers, timeout=15)
         print(f"Status kód pre {station_name}: {res.status_code}")
         
         if res.status_code != 200:
