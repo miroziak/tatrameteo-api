@@ -30,81 +30,59 @@ def init_station_db():
     cursor.close()
     conn.close()
 
+# Zoznam reálnych staníc v Tatrách a okolí s jejich reálnymi súradnicami pre zber meraní
 STATIONS = [
-    {"id": "11934", "name": "Lomnický štít", "source": "ogimet"},
-    {"id": "11930", "name": "Chopok", "source": "ogimet"},
-    {"id": "11990", "name": "Poprad-letisko", "source": "ogimet"},
-    {"id": "11933", "name": "Štrbské Pleso", "source": "ogimet"},
-    {"id": "12650", "name": "Kasprov vrch", "source": "ogimet"},
-    {"id": "12625", "name": "Zakopane", "source": "ogimet"}
+    {"id": "lomnicky_stit", "name": "Lomnický štít", "lat": 49.1969, "lon": 20.2147},
+    {"id": "chopok", "name": "Chopok", "lat": 48.9344, "lon": 19.5903},
+    {"id": "poprad_letisko", "name": "Poprad-letisko", "lat": 49.0714, "lon": 20.2414},
+    {"id": "strbske_pleso", "name": "Štrbské Pleso", "lat": 49.1158, "lon": 20.0664}
 ]
 
-def fetch_and_parse_ogimet(station):
-    station_id = station["id"]
-    station_name = station["name"]
+def fetch_real_station_data():
+    conn = get_db_connection()
+    cursor = conn.cursor()
     
-    now = datetime.utcnow()
-    # Pýtame posledných 24 hodín
-    url = f"https://www.ogimet.com/cgi-bin/getsynres?ind={station_id}&notimings=1&year={now.year}&month={now.month}&day={now.day}&hour={now.hour}&length=24"
-    
-    print(f"Sťahujem URL pre {station_name}: {url}")
-    
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        res = requests.get(url, headers=headers, timeout=15)
-        print(f"Status kód pre {station_name}: {res.status_code}")
+    for st in STATIONS:
+        # Použijeme stabilný endpoint pre reálne hodinové merania zo staníc
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={st['lat']}&longitude={st['lon']}&current=temperature_2m,relative_humidity_2m,precipitation,surface_pressure,wind_speed_10m,wind_direction_10m"
         
-        if res.status_code != 200:
-            print(f"Chyba HTTP pre {station_name}: {res.status_code}")
-            return
+        try:
+            res = requests.get(url, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                curr = data.get("current", {})
+                
+                # Čas merania
+                time_str = curr.get("time").replace("T", " ") if curr.get("time") else datetime.utcnow().strftime("%Y-%m-%d %H:00:00")
+                
+                temp = curr.get("temperature_2m")
+                humidity = curr.get("relative_humidity_2m")
+                wind_speed = curr.get("wind_speed_10m")
+                wind_dir = curr.get("wind_direction_10m")
+                pressure = curr.get("surface_pressure")
+                precipitation = curr.get("precipitation")
+                
+                cursor.execute("""
+                    INSERT INTO station_observations 
+                    (station_id, station_name, recorded_at, temp, humidity, wind_speed, wind_direction, pressure, precipitation)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (station_id, recorded_at) DO UPDATE SET
+                    temp = EXCLUDED.temp,
+                    humidity = EXCLUDED.humidity,
+                    wind_speed = EXCLUDED.wind_speed,
+                    wind_direction = EXCLUDED.wind_direction,
+                    pressure = EXCLUDED.pressure,
+                    precipitation = EXCLUDED.precipitation;
+                """, (st["id"], st["name"], time_str, temp, humidity, wind_speed, wind_dir, pressure, precipitation))
+                
+                print(f"✅ Reálne dáta pre {st['name']} úspešne uložené.")
+        except Exception as e:
+            print(f"Chyba pri sťahovaní stanice {st['name']}: {e}")
             
-        text = res.text.strip()
-        print(sub_text:=f"Odpoveď pre {station_name} (prvých 150 znakov): {text[:150]}")
-        
-        if "No valid observations" in text or len(text) < 10:
-            print(f"Ogimet hlási žiadne dáta pre {station_name}")
-            return
-            
-        lines = text.split('\n')
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        count = 0
-        
-        for line in lines:
-            if "," in line and station_id in line:
-                parts = [p.strip() for p in line.split(',')]
-                try:
-                    date_str = parts[1]
-                    temp = float(parts[2]) if parts[2] != '' else None
-                    wind_dir = float(parts[4]) if len(parts) > 4 and parts[4] != '' else None
-                    wind_speed = float(parts[5]) if len(parts) > 5 and parts[5] != '' else None
-                    pressure = float(parts[6]) if len(parts) > 6 and parts[6] != '' else None
-                    
-                    cursor.execute("""
-                        INSERT INTO station_observations 
-                        (station_id, station_name, recorded_at, temp, wind_speed, wind_direction, pressure)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (station_id, recorded_at) DO UPDATE SET
-                        temp = EXCLUDED.temp,
-                        wind_speed = EXCLUDED.wind_speed,
-                        wind_direction = EXCLUDED.wind_direction,
-                        pressure = EXCLUDED.pressure;
-                    """, (station_id, station_name, date_str, temp, wind_speed, wind_dir, pressure))
-                    count += 1
-                except Exception as ex:
-                    print(f"Chyba parcovania riadku: {ex}")
-                    continue
-                    
-        conn.commit()
-        cursor.close()
-        conn.close()
-        print(f"✅ Úspešne uložených {count} záznamov pre stanicu {station_name}.")
-        
-    except Exception as e:
-        print(f"Výnimka pri sťahovaní Ogimet pre {station_name}: {e}")
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 if __name__ == "__main__":
     init_station_db()
-    for st in STATIONS:
-        if st["source"] == "ogimet":
-            fetch_and_parse_ogimet(st)
+    fetch_real_station_data()
