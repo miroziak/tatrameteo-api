@@ -188,7 +188,33 @@ def debug_database():
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+@app.get("/api/station-history")
+def get_station_history(station_id: str):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT recorded_at, temp, wind_speed, wind_direction, precipitation 
+            FROM station_observations 
+            WHERE station_id = %s 
+            ORDER BY recorded_at ASC
+        """, (station_id,))
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
         
+        data = []
+        for r in rows:
+            data.append({
+                "time": str(r[0]),
+                "temp": r[1],
+                "wind_speed": r[2],
+                "wind_direction": r[3],
+                "precipitation": r[4]
+            })
+        return {"station_id": station_id, "observations": data}
+    except Exception as e:
+        return {"error": str(e)}        
 @app.get("/api/history")
 def get_point_history(lat: float, lon: float):
     try:
