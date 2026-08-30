@@ -44,15 +44,27 @@ def fetch_and_parse_ogimet(station):
     station_name = station["name"]
     
     now = datetime.utcnow()
-    url = f"https://www.ogimet.com/cgi-bin/getsynres?ind={station_id}&notimings=1&year={now.year}&month={now.month}&day={now.day}&hour=0&length=24"
+    # Pýtame posledných 24 hodín
+    url = f"https://www.ogimet.com/cgi-bin/getsynres?ind={station_id}&notimings=1&year={now.year}&month={now.month}&day={now.day}&hour={now.hour}&length=24"
+    
+    print(f"Sťahujem URL pre {station_name}: {url}")
     
     try:
         res = requests.get(url, timeout=15)
-        if res.status_code != 200 or "No valid observations" in res.text:
-            print(f"Žiadne dáta pre {station_name}")
+        print(f"Status kód pre {station_name}: {res.status_code}")
+        
+        if res.status_code != 200:
+            print(f"Chyba HTTP pre {station_name}: {res.status_code}")
             return
             
-        lines = res.text.split('\n')
+        text = res.text.strip()
+        print(sub_text:=f"Odpoveď pre {station_name} (prvých 150 znakov): {text[:150]}")
+        
+        if "No valid observations" in text or len(text) < 10:
+            print(f"Ogimet hlási žiadne dáta pre {station_name}")
+            return
+            
+        lines = text.split('\n')
         conn = get_db_connection()
         cursor = conn.cursor()
         count = 0
@@ -78,15 +90,17 @@ def fetch_and_parse_ogimet(station):
                         pressure = EXCLUDED.pressure;
                     """, (station_id, station_name, date_str, temp, wind_speed, wind_dir, pressure))
                     count += 1
-                except Exception:
+                except Exception as ex:
+                    print(f"Chyba parcovania riadku: {ex}")
                     continue
                     
         conn.commit()
         cursor.close()
         conn.close()
-        print(f"Uložených {count} záznamov pre stanicu {station_name}.")
+        print(f"✅ Úspešne uložených {count} záznamov pre stanicu {station_name}.")
+        
     except Exception as e:
-        print(f"Chyba Ogimet {station_name}: {e}")
+        print(f"Výnimka pri sťahovaní Ogimet pre {station_name}: {e}")
 
 if __name__ == "__main__":
     init_station_db()
