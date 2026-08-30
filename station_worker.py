@@ -30,12 +30,14 @@ def init_station_db():
     cursor.close()
     conn.close()
 
-# Zoznam reálnych staníc v Tatrách a okolí s jejich reálnymi súradnicami pre zber meraní
+# Kompletný zoznam reálnych staníc vrátane Kasprovho vrchu a Zakopaného
 STATIONS = [
     {"id": "lomnicky_stit", "name": "Lomnický štít", "lat": 49.1969, "lon": 20.2147},
     {"id": "chopok", "name": "Chopok", "lat": 48.9344, "lon": 19.5903},
     {"id": "poprad_letisko", "name": "Poprad-letisko", "lat": 49.0714, "lon": 20.2414},
-    {"id": "strbske_pleso", "name": "Štrbské Pleso", "lat": 49.1158, "lon": 20.0664}
+    {"id": "strbske_pleso", "name": "Štrbské Pleso", "lat": 49.1158, "lon": 20.0664},
+    {"id": "kasprov_vrch", "name": "Kasprov vrch", "lat": 49.2325, "lon": 19.9814},
+    {"id": "zakopane", "name": "Zakopane", "lat": 49.2992, "lon": 19.9489}
 ]
 
 def fetch_real_station_data():
@@ -43,7 +45,6 @@ def fetch_real_station_data():
     cursor = conn.cursor()
     
     for st in STATIONS:
-        # Použijeme stabilný endpoint pre reálne hodinové merania zo staníc
         url = f"https://api.open-meteo.com/v1/forecast?latitude={st['lat']}&longitude={st['lon']}&current=temperature_2m,relative_humidity_2m,precipitation,surface_pressure,wind_speed_10m,wind_direction_10m"
         
         try:
@@ -52,7 +53,6 @@ def fetch_real_station_data():
                 data = res.json()
                 curr = data.get("current", {})
                 
-                # Čas merania
                 time_str = curr.get("time").replace("T", " ") if curr.get("time") else datetime.utcnow().strftime("%Y-%m-%d %H:00:00")
                 
                 temp = curr.get("temperature_2m")
