@@ -191,17 +191,18 @@ def debug_database():
         
 @app.get("/api/history")
 def get_point_history(lat: float, lon: float):
-    """Vráti historické dáta pre daný bod z PostgreSQL databázy na Renderi."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Nájde záznamy pre bod v okolí kliknutých súradníc
-        cursor.execute("""
-            SELECT forecast_time, temperature, precipitation, snowfall, wind_speed, wind_gusts, wind_direction, freezing_level, point_name
+        # SQL vyberie pre každú hodinu (forecast_time) len ten najnovšie uložený záznam
+        cursor.log = cursor.execute("""
+            SELECT DISTINCT ON (forecast_time) 
+                   forecast_time, temperature, precipitation, snowfall, 
+                   wind_speed, wind_gusts, wind_direction, freezing_level, point_name
             FROM weather_history
             WHERE ABS(latitude - %s) < 0.05 AND ABS(longitude - %s) < 0.05
-            ORDER BY forecast_time ASC
+            ORDER BY forecast_time ASC, recorded_at DESC
         """, (lat, lon))
         
         rows = cursor.fetchall()
@@ -224,7 +225,7 @@ def get_point_history(lat: float, lon: float):
             
         return {"lat": lat, "lon": lon, "history": history_data}
     except Exception as e:
-        return {"lat": lat, "lon": lon, "history": [], "error": str(e)}        
+        return {"lat": lat, "lon": lon, "history": [], "error": str(e)}
 @app.post("/api/analyze-gpx")
 async def analyze_gpx(file: UploadFile = File(...)):
     try:
