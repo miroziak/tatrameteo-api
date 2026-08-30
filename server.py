@@ -195,8 +195,8 @@ def get_point_history(lat: float, lon: float):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # SQL vyberie pre každú hodinu (forecast_time) len ten najnovšie uložený záznam
-        cursor.log = cursor.execute("""
+        # Opravený riadok (bez cursor.log =)
+        cursor.execute("""
             SELECT DISTINCT ON (forecast_time) 
                    forecast_time, temperature, precipitation, snowfall, 
                    wind_speed, wind_gusts, wind_direction, freezing_level, point_name
