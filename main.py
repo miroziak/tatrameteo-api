@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.1.2"
+    version="4.2.0"
 )
 
 app.add_middleware(
@@ -32,8 +32,8 @@ app.add_middleware(
 # =============================================================================
 # 1. 35 REFERENČNÝCH UZLOV DWD ICON (7 x 5 mriežka, krok ~2.2 km)
 # =============================================================================
-GRID_X = np.linspace(0.0, 16000.0, 7)   # Západ -> Východ (0 až 16 km)
-GRID_Y = np.linspace(0.0, 12000.0, 5)   # Juh -> Sever (0 až 12 km)
+GRID_X = np.linspace(0.0, 16000.0, 7)
+GRID_Y = np.linspace(0.0, 12000.0, 5)
 
 DWD_LATS = []
 DWD_LONS = []
@@ -48,7 +48,6 @@ for gy in GRID_Y:
 # 2. 200+ REÁLNYCH BODOV VYSOKÝCH A BELIANSKYCH TATIER
 # =============================================================================
 TATRAS_POINTS = [
-    # Štíty
     {"name": "Gerlachovský štít", "alt": 2655, "x": 8000, "y": 6200, "lat": 49.1639, "lon": 20.1342, "cat": "peaks", "prio": 1},
     {"name": "Lomnický štít", "alt": 2634, "x": 12000, "y": 6800, "lat": 49.1953, "lon": 20.2131, "cat": "peaks", "prio": 1},
     {"name": "Ľadový štít", "alt": 2627, "x": 11000, "y": 8000, "lat": 49.1972, "lon": 20.1833, "cat": "peaks", "prio": 1},
@@ -168,7 +167,7 @@ def fetch_35_nodes_dwd():
     )
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheTatry-35NodeGrid/4.1'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheTatry-35NodeGrid/4.2'})
         with urllib.request.urlopen(req, timeout=12) as response:
             data = json.loads(response.read().decode())
             CACHE["matrix"] = data
@@ -219,7 +218,6 @@ def calculate_35_node_grid_state(step_idx: int):
                 dwd_prec[i, j] = 0.0
                 dwd_cape[i, j] = 50.0
 
-    # 2D Interpolátory synoptického poľa DWD ICON
     it_t = RegularGridInterpolator((GRID_X, GRID_Y), dwd_t, bounds_error=False, fill_value=None)
     it_wspd = RegularGridInterpolator((GRID_X, GRID_Y), dwd_wspd, bounds_error=False, fill_value=None)
     it_wdir = RegularGridInterpolator((GRID_X, GRID_Y), dwd_wdir, bounds_error=False, fill_value=None)
@@ -231,7 +229,6 @@ def calculate_35_node_grid_state(step_idx: int):
     for p in TATRAS_POINTS:
         px, py = float(p["x"]), float(p["y"])
 
-        # 1. Presná interpolácia zo 35 okolitých DWD uzlov
         t_dwd_local = float(it_t([px, py])[0])
         dem_dwd_local = float(it_dem([px, py])[0])
         wspd_dwd_local = float(it_wspd([px, py])[0])
@@ -239,10 +236,8 @@ def calculate_35_node_grid_state(step_idx: int):
         prec_dwd_local = float(it_prec([px, py])[0])
         cape_dwd_local = float(it_cape([px, py])[0])
 
-        # 2. Orografická výšková korekcia teploty voči lokálnej DWD hladine
         t_pt = t_dwd_local - ((p["alt"] - dem_dwd_local) * 0.0065)
 
-        # 3. Orografická modulácia vetra
         if p["cat"] == "peaks":
             w_factor = 1.35 + (p["alt"] - 2000.0) * 0.0003
         elif p["cat"] == "passes":
@@ -253,27 +248,19 @@ def calculate_35_node_grid_state(step_idx: int):
             w_factor = 0.85
         else:
             w_factor = 0.70
-        wspd_pt = (wspd_dwd_local * w_factor) * 3.6  # km/h
+        wspd_pt = (wspd_dwd_local * w_factor) * 3.6
 
-        # 4. Orografické zrážky (Seeder-Feeder)
         p_factor = 1.0 + max(p["alt"] - 1000.0, 0.0) * 0.00035
         prec_pt = prec_dwd_local * p_factor if prec_dwd_local > 0.0 else 0.0
-
-        # 5. Sneh (iba ak mrzne a prší)
         snow_pt = (prec_pt * 1.0 * 6.0) if t_pt < 0.0 else 0.0
 
-        # 6. LHI (Fyzikálne podmienené reálnou búrkovou instabilitou a zrážkami)
         if prec_dwd_local == 0.0 and cape_dwd_local < 600.0:
-            # Pokojná atmosféra bez zrážok = bezpečno (0 až 5)
             lhi_pt = min(cape_dwd_local / 120.0, 5.0)
         else:
-            # Aktívna konvekcia alebo vysoká labilita (CAPE >= 600 J/kg alebo zrážky > 0)
             cape_score = min(cape_dwd_local / 20.0, 50.0)
             precip_score = min(prec_dwd_local * 8.0, 30.0)
-            
             exposure = min(max(p["alt"] - 1200.0, 0.0) / 50.0, 20.0)
             trigger_weight = min((cape_dwd_local / 800.0) + (prec_dwd_local / 2.0), 1.0)
-            
             lhi_pt = min(cape_score + precip_score + (exposure * trigger_weight), 100.0)
 
         results.append({
@@ -301,7 +288,86 @@ def calculate_35_node_grid_state(step_idx: int):
     }
 
 # =============================================================================
-# 5. FASTAPI ENDPOINTY
+# 5. RÁDIOSONDAŽ POPRAD-GÁNOVCE (WMO 11952)
+# =============================================================================
+SOUNDING_CACHE = {"ts": 0, "data": None}
+
+def fetch_sounding_ganovce():
+    now = datetime.datetime.now().timestamp()
+    if SOUNDING_CACHE["data"] and (now - SOUNDING_CACHE["ts"] < 900):
+        return SOUNDING_CACHE["data"]
+
+    # Open-Meteo vertikálny stĺpec nad Popradom-Gánovcami
+    url = (
+        "https://api.open-meteo.com/v1/forecast?"
+        "latitude=49.035&longitude=20.323&hourly="
+        "temperature_2m,relative_humidity_2m,surface_pressure,cape,lifted_index,"
+        "temperature_1000hPa,temperature_925hPa,temperature_850hPa,temperature_700hPa,temperature_500hPa,temperature_300hPa,temperature_200hPa,"
+        "wind_speed_1000hPa,wind_speed_850hPa,wind_speed_700hPa,wind_speed_500hPa,wind_speed_300hPa,"
+        "wind_direction_1000hPa,wind_direction_850hPa,wind_direction_700hPa,wind_direction_500hPa,wind_direction_300hPa"
+        "&timezone=Europe%2FBratislava&forecast_days=1"
+    )
+
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheSounding/1.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            raw = json.loads(response.read().decode())
+            cur_h = datetime.datetime.now().hour
+            h = raw.get("hourly", {})
+
+            cape_val = h.get("cape", [0.0])[cur_h] if len(h.get("cape", [])) > cur_h else 0.0
+            li_val = h.get("lifted_index", [0.0])[cur_h] if len(h.get("lifted_index", [])) > cur_h else 0.0
+            t_surface = h.get("temperature_2m", [18.0])[cur_h]
+            rh_surface = h.get("relative_humidity_2m", [60.0])[cur_h]
+
+            # Odhad mrazovej hladiny (0 °C izoterma)
+            t_850 = h.get("temperature_850hPa", [12.0])[cur_h]
+            t_700 = h.get("temperature_700hPa", [3.0])[cur_h]
+            t_500 = h.get("temperature_500hPa", [-14.0])[cur_h]
+            
+            if t_surface <= 0:
+                zero_iso = 708
+            elif t_850 <= 0:
+                zero_iso = 708 + (t_surface / (t_surface - t_850)) * (1460 - 708)
+            elif t_700 <= 0:
+                zero_iso = 1460 + (t_850 / (t_850 - t_700)) * (3020 - 1460)
+            else:
+                zero_iso = 3020 + (t_700 / (t_700 - t_500)) * (5600 - 3020)
+
+            levels = [
+                {"hpa": 930, "alt": 708, "name": "Povrch (Gánovce)", "temp": round(t_surface, 1), "rh": round(rh_surface, 0), "wind_kmh": round(h.get("wind_speed_1000hPa", [5])[cur_h] * 3.6, 1), "wdir": h.get("wind_direction_1000hPa", [220])[cur_h]},
+                {"hpa": 850, "alt": 1460, "name": "850 hPa (Lesné pásmo)", "temp": round(t_850, 1), "rh": 70, "wind_kmh": round(h.get("wind_speed_850hPa", [10])[cur_h] * 3.6, 1), "wdir": h.get("wind_direction_850hPa", [240])[cur_h]},
+                {"hpa": 700, "alt": 3020, "name": "700 hPa (Nad štítmi)", "temp": round(t_700, 1), "rh": 65, "wind_kmh": round(h.get("wind_speed_700hPa", [15])[cur_h] * 3.6, 1), "wdir": h.get("wind_direction_700hPa", [260])[cur_h]},
+                {"hpa": 500, "alt": 5600, "name": "500 hPa (Stredná troposféra)", "temp": round(t_500, 1), "rh": 50, "wind_kmh": round(h.get("wind_speed_500hPa", [25])[cur_h] * 3.6, 1), "wdir": h.get("wind_direction_500hPa", [270])[cur_h]},
+                {"hpa": 300, "alt": 9200, "name": "300 hPa (Jet stream)", "temp": round(h.get("temperature_300hPa", [-42.0])[cur_h], 1), "rh": 35, "wind_kmh": round(h.get("wind_speed_300hPa", [35])[cur_h] * 3.6, 1), "wdir": h.get("wind_direction_300hPa", [275])[cur_h]}
+            ]
+
+            data = {
+                "station": "Poprad-Gánovce (11952)",
+                "elevation_m": 708,
+                "timestamp_str": datetime.datetime.now().strftime("%d.%m. %H:%M"),
+                "cape_jkg": round(cape_val, 1),
+                "lifted_index": round(li_val, 1),
+                "freezing_level_m": round(zero_iso, 0),
+                "levels": levels
+            }
+            SOUNDING_CACHE["data"] = data
+            SOUNDING_CACHE["ts"] = now
+            return data
+    except Exception as e:
+        print(f"[VAROVANIE] Sondáž zlyhala: {e}")
+        return {
+            "station": "Poprad-Gánovce (11952)",
+            "elevation_m": 708,
+            "timestamp_str": datetime.datetime.now().strftime("%d.%m. %H:%M"),
+            "cape_jkg": 150.0,
+            "lifted_index": -1.2,
+            "freezing_level_m": 3450,
+            "levels": []
+        }
+
+# =============================================================================
+# 6. FASTAPI ENDPOINTY
 # =============================================================================
 @app.get("/")
 def read_root():
@@ -321,9 +387,12 @@ def health_check():
 def get_points_grid(step: int = Query(0, ge=0, le=8)):
     return calculate_35_node_grid_state(step)
 
+@app.get("/api/sounding")
+def get_sounding():
+    return fetch_sounding_ganovce()
+
 @app.get("/api/hazards")
 def get_hazards_48h():
-    """Analyzuje extrémne prejavy počasia na celých 48 hodín (kroky 0 až 8)."""
     hazards = []
     base_dt = datetime.datetime.now()
 
@@ -333,7 +402,6 @@ def get_hazards_48h():
         time_str = target_time.strftime("%d.%m. %H:%M") + f" (+{data['hours_ahead']}h)"
 
         for p in data["points"]:
-            # 1. Extrémny vietor / Orkán
             if p["wind_kmh"] >= 105.0:
                 hazards.append({
                     "severity": "extreme",
@@ -356,8 +424,6 @@ def get_hazards_48h():
                     "value": f"{p['wind_kmh']} km/h",
                     "desc": "Padavý vietor v lesnom pásme. Pozor na padajúce stromy a konáre."
                 })
-                
-            # 2. Riziko bleskov (LHI)
             if p["lhi"] >= 65.0:
                 hazards.append({
                     "severity": "extreme",
@@ -369,8 +435,6 @@ def get_hazards_48h():
                     "value": f"LHI {p['lhi']}/100",
                     "desc": "Akútne nebezpečenstvo bleskov na vrcholoch a hrebeňoch."
                 })
-                
-            # 3. Prívalový lejak
             if p["precip_mmh"] >= 12.0:
                 hazards.append({
                     "severity": "high",
@@ -382,8 +446,6 @@ def get_hazards_48h():
                     "value": f"{p['precip_mmh']} mm/h",
                     "desc": "Intenzívne zrážky. Riziko rozvodnenia horských bystrín a strhnutia chodníkov."
                 })
-                
-            # 4. Snehová kalamita & záveje
             if p["snow_6h_cm"] >= 15.0:
                 hazards.append({
                     "severity": "high",
