@@ -1,13 +1,142 @@
 import io
-import os
 import numpy as np
 import scipy.ndimage as ndimage
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-
-from fastapi import FastAPI, Response, Query
+from fastapi import Response, Query
 from fastapi.middleware.cors import CORSMiddleware
+
+# 1. Povoľte CORS pre avalanche.sk (ak to ešte nemáte nastavené)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://www.avalanche.sk",
+        "http://www.avalanche.sk",
+        "https://avalanche.sk",
+        "http://avalanche.sk"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 2. Pomocná funkcia pre generovanie terénu a simulácie
+def run_tatry_simulation():
+    dx, dy = 200.0, 200.0
+    x = np.arange(120) * dx
+    y = np.arange(120) * dy
+    X, Y = np.meshgrid(x, y, indexing='ij')
+
+    dem = 650.0 + (Y * 0.005)
+    main_ridge = 1300.0 * np.exp(-((Y - 16000.0)**2) / (2 * 3000.0**2))
+    dem += main_ridge * (1.0 + 0.2 * np.sin(X / 2000.0) * np.cos(X / 4000.0))
+    dem += 700.0 * np.exp(-((X - 12000.0)**2 + (Y - 16200.0)**2) / (2 * 800.0**2))
+    dem += 680.0 * np.exp(-((X - 18000.0)**2 + (Y - 16800.0)**2) / (2 * 750.0**2))
+    dem += 600.0 * np.exp(-((X - 4000.0)**2 + (Y - 15000.0)**2) / (2 * 900.0**2))
+    dem += 580.0 * np.exp(-((X - 8500.0)**2 + (Y - 16000.0)**2) / (2 * 700.0**2))
+    dem[Y < 6000.0] = 650.0 + (Y[Y < 6000.0] * 0.003) + 20.0 * np.sin(X[Y < 6000.0] / 1500.0)
+    dem = ndimage.gaussian_filter(dem, sigma=1.5)
+
+    dh_dx, dh_dy = np.gradient(dem, dx, dy)
+    slope = np.sqrt(dh_dx**2 + dh_dy**2)
+    aspect = np.arctan2(-dh_dx, dh_dy)
+
+    # Vietor a Bóra
+    u_bg = np.full_like(X, 13.0 * np.cos(np.radians(-50.0)))
+    v_bg = np.full_like(Y, 13.0 * np.sin(np.radians(-50.0)))
+    h_rel = np.maximum(dem - ndimage.gaussian_filter(dem, 18), 0.0)
+    delta_S = (1.8 * h_rel / 4000.0) * np.exp(-35.0 / 4000.0)
+    u_spd = u_bg * (1.0 + delta_S)
+    v_spd = v_bg * (1.0 + delta_S)
+
+    downslope = u_spd * dh_dx + v_spd * dh_dy
+    bora_mask = (downslope < -0.1) & (dem > 700.0)
+    acc = np.zeros_like(dem)
+    acc[bora_mask] = np.sqrt(2.0 * 9.81 * np.maximum(2000.0 - dem[bora_mask], 0.0) * 0.08)
+
+    spd = np.sqrt(u_spd**2 + v_spd**2)
+    u_opt = u_spd.copy()
+    v_opt = v_spd.copy()
+    u_opt[bora_mask] += (u_spd[bora_mask] / spd[bora_mask]) * acc[bora_mask]
+    v_opt[bora_mask] += (v_spd[bora_mask] / spd[bora_mask]) * acc[bora_mask]
+    w_opt = u_opt * dh_dx + v_opt * dh_dy
+
+    # Zrážky a Sneh
+    p_final = np.maximum(3.5 + (w_opt * 0.5), 0.2)
+    temp_field = -4.0 - ((dem - 700.0) * 0.0065)
+    snow_diff = np.where(temp_field < 0, p_final * 6.0, 0.0)
+
+    # LHI
+    lhi = np.clip(np.exp((dem - 650.0) / 600.0) * (1.0 + 2.0 * slope) * 0.4 + np.maximum(w_opt, 0.0) * 45.0, 0.0, 100.0)
+
+    return X, Y, dem, u_opt, v_opt, acc, p_final, snow_diff, lhi, temp_field
+
+# 3. Chýbajúci endpoint pre renderovanie mapy
+@app.get("/api/render-map")
+def render_map(layer: str = Query("all")):
+    X, Y, dem, u_opt, v_opt, acc, p_final, snow_diff, lhi, temp_field = run_tatry_simulation()
+    X_km, Y_km = X / 1000.0, Y / 1000.0
+
+    if layer == "all":
+        fig, axs = plt.subplots(2, 2, figsize=(15, 12), facecolor='#0f172a')
+        for row in axs:
+            for ax in row:
+                ax.set_facecolor('#1e293b')
+                ax.tick_params(colors='#94a3b8')
+                for s in ax.spines.values():
+                    s.set_color('#334155')
+
+        # 1. Vietor
+        im1 = axs[0, 0].contourf(X_km, Y_km, dem, levels=25, cmap='terrain', alpha=0.85)
+        axs[0, 0].quiver(X_km[::6, ::6], Y_km[::6, ::6], u_opt[::6, ::6], v_opt[::6, ::6], scale=140, color='black')
+        axs[0, 0].set_title('Topografia & Vietor (Bóra)', color='white', fontweight='bold')
+        fig.colorbar(im1, ax=axs[0, 0]).ax.yaxis.set_tick_params(color='white')
+
+        # 2. Zrážky
+        im2 = axs[0, 1].contourf(X_km, Y_km, p_final, levels=20, cmap='YlGnBu')
+        axs[0, 1].set_title('Lokálne zrážky (mm/h)', color='white', fontweight='bold')
+        fig.colorbar(im2, ax=axs[0, 1]).ax.yaxis.set_tick_params(color='white')
+
+        # 3. Sneh
+        m_diff = max(np.max(snow_diff), 1.0)
+        im3 = axs[1, 0].contourf(X_km, Y_km, snow_diff, levels=25, cmap='Blues')
+        axs[1, 0].set_title('Nový sneh za 6h (cm)', color='white', fontweight='bold')
+        fig.colorbar(im3, ax=axs[1, 0]).ax.yaxis.set_tick_params(color='white')
+
+        # 4. Blesky & Inverzia
+        im4 = axs[1, 1].contourf(X_km, Y_km, lhi, levels=20, cmap='YlOrRd')
+        axs[1, 1].contour(X_km, Y_km, temp_field, levels=[-4.0, -2.0, 0.0], colors='#38bdf8', linewidths=1.2, linestyles='-.')
+        axs[1, 1].set_title('Riziko bleskov (LHI) & Teplotné pole', color='white', fontweight='bold')
+        fig.colorbar(im4, ax=axs[1, 1]).ax.yaxis.set_tick_params(color='white')
+
+        fig.tight_layout()
+    else:
+        fig, ax = plt.subplots(figsize=(9, 7), facecolor='#0f172a')
+        ax.set_facecolor('#1e293b')
+        ax.tick_params(colors='#94a3b8')
+
+        if layer == "wind":
+            im = ax.contourf(X_km, Y_km, dem, levels=25, cmap='terrain', alpha=0.85)
+            ax.quiver(X_km[::6, ::6], Y_km[::6, ::6], u_opt[::6, ::6], v_opt[::6, ::6], scale=140, color='black')
+            ax.set_title('Prúdenie vetra (Tatranská Bóra)', color='white', fontweight='bold')
+        elif layer == "precip":
+            im = ax.contourf(X_km, Y_km, p_final, levels=25, cmap='YlGnBu')
+            ax.set_title('Intenzita zrážok (mm/h)', color='white', fontweight='bold')
+        elif layer == "snow":
+            im = ax.contourf(X_km, Y_km, snow_diff, levels=25, cmap='Blues')
+            ax.set_title('Nový sneh (cm / 6h)', color='white', fontweight='bold')
+        elif layer == "lightning":
+            im = ax.contourf(X_km, Y_km, lhi, levels=25, cmap='YlOrRd')
+            ax.set_title('Index bleskov (LHI)', color='white', fontweight='bold')
+
+        fig.colorbar(im, ax=ax).ax.yaxis.set_tick_params(color='white')
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=120, bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return Response(content=buf.getvalue(), media_type="image/png")
 
 app = FastAPI(title="TATRYS-50 v2 API (Render)")
 
