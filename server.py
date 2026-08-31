@@ -6,6 +6,15 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 import os
 import psycopg2
+from wind_engine import calculate_unified_microclimate
+
+@app.route('/api/microclimate-grid', methods=['GET'])
+def get_microclimate_grid():
+    try:
+        data = calculate_unified_microclimate()
+        return jsonify({"vectors": data})
+    except Exception as e:
+        return jsonify({"error": str(e), "vectors": []}), 500
 
 def get_db_connection():
     return psycopg2.connect(
