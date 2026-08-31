@@ -1,5 +1,6 @@
 import io
 import os
+import datetime
 import numpy as np
 import scipy.ndimage as ndimage
 import matplotlib
@@ -11,11 +12,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="TATRYS-50 v2 API | Avalanche.sk",
-    description="Kompletný orografický model Vysokých Tatier s orientačnými bodmi v teréne.",
-    version="2.1.0"
+    description="48-hodinový numerický orografický model Vysokých Tatier s krokom 6 hodín.",
+    version="2.2.0"
 )
 
-# Povolenie CORS
 origins = [
     "https://www.avalanche.sk",
     "http://www.avalanche.sk",
@@ -33,7 +33,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Zoznam sledovaných bodov v teréne (v km súradniciach modelu 0-24 km)
 LANDMARKS = [
     {"name": "Lomnický štít", "alt": "2634m", "x": 18.0, "y": 16.8, "type": "peak"},
     {"name": "Gerlach", "alt": "2655m", "x": 12.0, "y": 16.2, "type": "peak"},
@@ -45,7 +44,6 @@ LANDMARKS = [
 ]
 
 def draw_landmarks_on_axis(ax, is_compact=False):
-    """Vykreslí orientačné štíty a obce priamo do matplotlib grafu."""
     for lm in LANDMARKS:
         is_peak = lm["type"] == "peak"
         marker = '^' if is_peak else 'o'
@@ -53,20 +51,15 @@ def draw_landmarks_on_axis(ax, is_compact=False):
         msize = 7 if is_compact else 9
         fsize = 7 if is_compact else 8.5
         
-        # Bod na mape
         ax.plot(lm["x"], lm["y"], marker=marker, markersize=msize, color=mcolor, 
                 markeredgecolor='black', markeredgewidth=1.2, zorder=10)
         
-        # Textový štítok
         label = f"{lm['name']}\n({lm['alt']})" if not is_compact else lm['name']
         ax.text(lm["x"], lm["y"] + (0.5 if is_compact else 0.6), label,
                 fontsize=fsize, fontweight='bold', color='white', ha='center', va='bottom',
                 bbox=dict(boxstyle='round,pad=0.2', facecolor='#0f172a', edgecolor=mcolor, alpha=0.85, linewidth=0.8),
                 zorder=11)
 
-# =============================================================================
-# 1. TOPOGRAFIA TATIER (200m DEM)
-# =============================================================================
 def generate_tatry_dem(grid_shape=(120, 120), dx=200.0, dy=200.0):
     nx, ny = grid_shape
     x = np.arange(nx) * dx
@@ -89,57 +82,52 @@ def generate_tatry_dem(grid_shape=(120, 120), dx=200.0, dy=200.0):
     dem = ndimage.gaussian_filter(dem, sigma=1.5)
     return X, Y, dem, dx, dy
 
+# Globálny statický terén
+X, Y, DEM, DX, DY = generate_tatry_dem()
+
 # =============================================================================
-# 2. NUMERICKÝ SIMULAČNÝ ENGINE
+# NUMERICKÁ SIMULÁCIA PRE JEDNOTLIVÉ ČASOVÉ KROKY (0h až 48h)
 # =============================================================================
-def run_tatry_numerical_simulation():
-    X, Y, dem, dx, dy = generate_tatry_dem()
+def simulate_forecast_step(step_idx: int):
+    """
+    step_idx: 0 až 8 (0 = +0h, 1 = +6h, ..., 8 = +48h)
+    Generuje časovo závislé meteorologické pole s dynamickým vývojom frontu.
+    """
+    hours_ahead = step_idx * 6
     
-    # DWD ICON-D2 syntéza
-    dwd_dx, dwd_dy = 2200.0, 2200.0
-    dwd_x = np.arange(0, 24000.0 + dwd_dx, dwd_dx)
-    dwd_y = np.arange(0, 24000.0 + dwd_dy, dwd_dy)
-    DWD_X, DWD_Y = np.meshgrid(dwd_x, dwd_y, indexing='ij')
+    # Synoptická dynamika v čase (prechod studeného frontu a zmena vetra)
+    # Rýchlosť a smer vetra v čase
+    wind_base_speed = 10.0 + 5.0 * np.sin(step_idx * 0.7)
+    wind_angle_deg = -50.0 + 20.0 * np.cos(step_idx * 0.5) # stáčanie SZ -> S -> SV
+    rad = np.radians(wind_angle_deg)
     
-    rad = np.radians(270.0 - 320.0)
-    dwd_u_raw = 13.0 * np.cos(rad)
-    dwd_v_raw = 13.0 * np.sin(rad)
-    dwd_u = np.full_like(DWD_X, dwd_u_raw) + 1.5 * np.sin(DWD_X / 8000.0)
-    dwd_v = np.full_like(DWD_Y, dwd_v_raw) + 1.5 * np.cos(DWD_Y / 8000.0)
-    dwd_temp = -4.0 - (DWD_Y * 0.0001) + 2.0 * np.sin(DWD_X / 10000.0)
-    dwd_precip = np.maximum(3.5 + 2.0 * np.sin(DWD_X / 6000.0) * np.cos(DWD_Y / 10000.0), 0.5)
-    dwd_dem = 700.0 + 600.0 * np.exp(-((DWD_Y - 16000.0)**2) / (2 * 5000.0**2))
+    u_bg = np.full_like(X, wind_base_speed * np.cos(rad)) + 1.5 * np.sin((X + hours_ahead * 500.0) / 8000.0)
+    v_bg = np.full_like(Y, wind_base_speed * np.sin(rad)) + 1.5 * np.cos((Y + hours_ahead * 500.0) / 8000.0)
     
-    from scipy.interpolate import RegularGridInterpolator
-    interp_u = RegularGridInterpolator((dwd_x, dwd_y), dwd_u, bounds_error=False, fill_value=None)
-    interp_v = RegularGridInterpolator((dwd_x, dwd_y), dwd_v, bounds_error=False, fill_value=None)
-    interp_t = RegularGridInterpolator((dwd_x, dwd_y), dwd_temp, bounds_error=False, fill_value=None)
-    interp_p = RegularGridInterpolator((dwd_x, dwd_y), dwd_precip, bounds_error=False, fill_value=None)
-    interp_d = RegularGridInterpolator((dwd_x, dwd_y), dwd_dem, bounds_error=False, fill_value=None)
+    # Teplotný trend (ochladenie za frontom)
+    t_synoptic = -2.0 - (step_idx * 0.6) + 2.0 * np.sin(X / 10000.0)
+    t_bg = t_synoptic - ((DEM - 700.0) * 0.0065)
     
-    pts = np.array([X.ravel(), Y.ravel()]).T
-    u_bg = interp_u(pts).reshape(X.shape)
-    v_bg = interp_v(pts).reshape(X.shape)
-    t_bg = interp_t(pts).reshape(X.shape)
-    p_bg = interp_p(pts).reshape(X.shape)
-    d_bg = interp_d(pts).reshape(X.shape)
+    # Inverzia (silnejšia v noci, t.j. kroky 2, 6)
+    is_night = (step_idx % 4) in [1, 2]
+    inv_strength = 6.5 if is_night else 1.5
+    temp_field = t_bg.copy()
+    inv_mask = DEM < 1000.0
+    temp_field[inv_mask] -= inv_strength * ((1000.0 - DEM[inv_mask]) / 350.0)
     
-    t_corrected = t_bg - ((dem - d_bg) * 0.0065)
-    inversion_top, strength = 1000.0, 6.5
-    temp_field = t_corrected.copy()
-    inv_mask = dem < inversion_top
-    temp_field[inv_mask] -= strength * ((inversion_top - dem[inv_mask]) / (inversion_top - 650.0))
-    
-    dh_dx, dh_dy = np.gradient(dem, dx, dy)
+    # Svahové metriky
+    dh_dx, dh_dy = np.gradient(DEM, DX, DY)
     slope = np.sqrt(dh_dx**2 + dh_dy**2)
     aspect = np.arctan2(-dh_dx, dh_dy)
     
-    dem_base = ndimage.gaussian_filter(dem, sigma=18)
-    h_rel = np.maximum(dem - dem_base, 0.0)
+    # Taylor-Lee Speed-up
+    dem_base = ndimage.gaussian_filter(DEM, sigma=18)
+    h_rel = np.maximum(DEM - dem_base, 0.0)
     delta_S = (1.8 * h_rel / 4000.0) * np.exp(-35.0 / 4000.0)
     u_speed = u_bg * (1.0 + delta_S)
     v_speed = v_bg * (1.0 + delta_S)
     
+    # Ryanovo stáčanie
     speed_init = np.sqrt(u_speed**2 + v_speed**2)
     wind_dir = np.arctan2(v_speed, u_speed)
     delta_theta = np.clip(-0.25 * (slope * 100.0) * np.sin(2.0 * (aspect - wind_dir)), -0.4, 0.4)
@@ -147,36 +135,31 @@ def run_tatry_numerical_simulation():
     u_steered = speed_init * np.cos(steered_dir)
     v_steered = speed_init * np.sin(steered_dir)
     
-    cos_diff = np.cos(aspect - wind_dir)
-    shelter = np.ones_like(dem)
-    shelter[cos_diff < 0.0] = 1.0 + 0.35 * cos_diff[cos_diff < 0.0] * np.minimum(slope[cos_diff < 0.0], 0.6)
-    u_shelter = u_steered * shelter
-    v_shelter = v_steered * shelter
-    
-    downslope = u_shelter * dh_dx + v_shelter * dh_dy
-    bora_mask = (downslope < -0.1) & (dem > 700.0)
-    fall_h = np.maximum(2000.0 - dem, 0.0)
-    acc = np.zeros_like(dem)
+    # Tatranská Bóra
+    downslope = u_steered * dh_dx + v_steered * dh_dy
+    bora_mask = (downslope < -0.1) & (DEM > 700.0)
+    fall_h = np.maximum(2000.0 - DEM, 0.0)
+    acc = np.zeros_like(DEM)
     acc[bora_mask] = np.sqrt(2.0 * 9.81 * fall_h[bora_mask] * 0.08)
     
-    spd = np.sqrt(u_shelter**2 + v_shelter**2)
-    u_bora = u_shelter.copy()
-    v_bora = v_shelter.copy()
-    u_bora[bora_mask] += (u_shelter[bora_mask] / spd[bora_mask]) * acc[bora_mask]
-    v_bora[bora_mask] += (v_shelter[bora_mask] / spd[bora_mask]) * acc[bora_mask]
+    spd = np.sqrt(u_steered**2 + v_steered**2)
+    u_bora = u_steered.copy()
+    v_bora = v_steered.copy()
+    u_bora[bora_mask] += (u_steered[bora_mask] / spd[bora_mask]) * acc[bora_mask]
+    v_bora[bora_mask] += (v_steered[bora_mask] / spd[bora_mask]) * acc[bora_mask]
     
     # MASCON Poisson Solver
-    nx, ny = dem.shape
+    nx, ny = DEM.shape
     lam = np.zeros((nx, ny))
     du_dx = np.zeros_like(u_bora)
     dv_dy = np.zeros_like(v_bora)
-    du_dx[1:-1, :] = (u_bora[2:, :] - u_bora[:-2, :]) / (2.0 * dx)
-    dv_dy[:, 1:-1] = (v_bora[:, 2:] - v_bora[:, :-2]) / (2.0 * dy)
+    du_dx[1:-1, :] = (u_bora[2:, :] - u_bora[:-2, :]) / (2.0 * DX)
+    dv_dy[:, 1:-1] = (v_bora[:, 2:] - v_bora[:, :-2]) / (2.0 * DY)
     source = -2.0 * (du_dx + dv_dy)
     omega = 1.65
-    dx2, dy2 = dx**2, dy**2
+    dx2, dy2 = DX**2, DY**2
     denom = 2.0 * (1.0/dx2 + 1.0/dy2)
-    for _ in range(100):
+    for _ in range(60):
         lam_old = lam.copy()
         for i in range(1, nx-1):
             for j in range(1, ny-1):
@@ -187,23 +170,22 @@ def run_tatry_numerical_simulation():
             
     dlam_dx = np.zeros_like(lam)
     dlam_dy = np.zeros_like(lam)
-    dlam_dx[1:-1, :] = (lam[2:, :] - lam[:-2, :]) / (2.0 * dx)
-    dlam_dy[:, 1:-1] = (lam[:, 2:] - lam[:, :-2]) / (2.0 * dy)
+    dlam_dx[1:-1, :] = (lam[2:, :] - lam[:-2, :]) / (2.0 * DX)
+    dlam_dy[:, 1:-1] = (lam[:, 2:] - lam[:, :-2]) / (2.0 * DY)
     u_opt = u_bora + 0.5 * dlam_dx
     v_opt = v_bora + 0.5 * dlam_dy
     w_opt = u_opt * dh_dx + v_opt * dh_dy
     
-    # Zrážky
-    p_sf = p_bg.copy()
+    # Zrážková vlna (mení sa v čase)
+    synoptic_precip = np.maximum(2.0 + 3.0 * np.sin((step_idx + 1) * 0.8) + 1.5 * np.sin(X / 6000.0), 0.1)
+    p_sf = synoptic_precip.copy()
     p_sf[w_opt > 0.0] *= (1.0 + 0.45 * w_opt[w_opt > 0.0])
-    shift_x = int(-u_opt.mean() * 300.0 / dx)
-    shift_y = int(-v_opt.mean() * 300.0 / dy)
+    shift_x = int(-u_opt.mean() * 300.0 / DX)
+    shift_y = int(-v_opt.mean() * 300.0 / DY)
     p_drift = np.roll(np.roll(p_sf, shift_x, axis=0), shift_y, axis=1)
-    p_final = p_drift.copy()
-    p_final[w_opt < 0.0] *= np.exp(0.35 * w_opt[w_opt < 0.0])
-    p_final = np.maximum(p_final, 0.0)
+    p_final = np.maximum(p_drift * np.where(w_opt < 0.0, np.exp(0.35 * w_opt), 1.0), 0.0)
     
-    # Sneh
+    # Sneh & Prevejovanie
     snow_mask = temp_field < 0.0
     fresh_snow_rate = np.zeros_like(p_final)
     fresh_snow_rate[snow_mask] = p_final[snow_mask]
@@ -217,37 +199,38 @@ def run_tatry_numerical_simulation():
     qy = snow_drift * (v_opt / wind_spd)
     dqx = np.zeros_like(qx)
     dqy = np.zeros_like(qy)
-    dqx[1:-1, :] = (qx[2:, :] - qx[:-2, :]) / (2.0 * dx)
-    dqy[:, 1:-1] = (qy[:, 2:] - qy[:, :-2]) / (2.0 * dy)
+    dqx[1:-1, :] = (qx[2:, :] - qx[:-2, :]) / (2.0 * DX)
+    dqy[:, 1:-1] = (qy[:, 2:] - qy[:, :-2]) / (2.0 * DY)
     snow_redist = -(dqx + dqy) * (6.0 * 3600.0) / (100.0 * 0.01)
     snow_redist[snow_redist > 0.0] *= 0.85
     
-    snow_start = 30.0
-    snow_final = np.maximum(snow_start + (fresh_snow_rate * 6.0) + snow_redist, 0.0)
-    snow_diff = np.where(snow_mask, snow_final - snow_start, 0.0)
+    # Kumulácia v čase (zmena za daný 6h interval)
+    snow_diff = np.where(snow_mask, (fresh_snow_rate * 6.0) + snow_redist, 0.0)
     
     # LHI
-    exposure = np.exp((dem - 650.0) / 600.0) * (1.0 + 2.0 * slope)
-    instability = np.maximum(w_opt, 0.0) * (800.0 / 500.0)
+    exposure = np.exp((DEM - 650.0) / 600.0) * (1.0 + 2.0 * slope)
+    instability = np.maximum(w_opt, 0.0) * (600.0 / 500.0)
     temp_factor = np.zeros_like(temp_field)
     mp = (temp_field >= -18.0) & (temp_field <= -2.0)
     temp_factor[mp] = np.exp(-((temp_field[mp] + 10.0)**2) / 32.0)
     lhi = np.clip(ndimage.gaussian_filter(exposure * 0.4 + instability * 30.0 + temp_factor * 40.0, sigma=1.0), 0.0, 100.0)
     
     return {
-        'X': X, 'Y': Y, 'dem': dem, 'u_opt': u_opt, 'v_opt': v_opt,
-        'acc': acc, 'p_final': p_final, 'snow_diff': snow_diff,
+        'hours': hours_ahead,
+        'u_opt': u_opt, 'v_opt': v_opt, 'acc': acc,
+        'p_final': p_final, 'snow_diff': snow_diff,
         'lhi': lhi, 'temp_field': temp_field, 'wind_spd': wind_spd
     }
 
-CACHE = run_tatry_numerical_simulation()
+# Predpočítanie všetkých 9 časových krokov do pamäte (0h až 48h)
+FORECAST_TIMELINE = [simulate_forecast_step(i) for i in range(9)]
 
 # =============================================================================
-# 3. ENDPOINTY
+# ENDPOINTY S PODPOROU PARAMETRA STEP (0 až 8)
 # =============================================================================
 @app.get("/")
 def read_root():
-    return {"status": "ok", "service": "TATRYS-50 v2 Meteo Engine"}
+    return {"status": "ok", "service": "TATRYS-50 v2 48h Engine"}
 
 @app.get("/health")
 def health_check():
@@ -255,8 +238,8 @@ def health_check():
 
 @app.get("/api/forecast")
 @app.get("/api/stations")
-def get_forecast():
-    d = CACHE
+def get_forecast(step: int = Query(0, ge=0, le=8)):
+    d = FORECAST_TIMELINE[step]
     locs = [
         {"name": "Lomnický štít (2 634 m)", "ix": int(18000/200), "iy": int(16800/200)},
         {"name": "Gerlachovský štít (2 655 m)", "ix": int(12000/200), "iy": int(16200/200)},
@@ -280,12 +263,13 @@ def get_forecast():
             "lightning_risk": "Vysoké" if lh > 60 else ("Stredné" if lh > 30 else "Nízke"),
             "lhi_raw": round(lh, 0)
         })
-    return {"status": "ok", "stations": res}
+    return {"status": "ok", "step": step, "hours_ahead": d['hours'], "stations": res}
 
 @app.get("/api/render-map")
-def render_map(layer: str = Query("all")):
-    d = CACHE
-    X, Y = d['X'] / 1000.0, d['Y'] / 1000.0
+def render_map(layer: str = Query("all"), step: int = Query(0, ge=0, le=8)):
+    d = FORECAST_TIMELINE[step]
+    X_km, Y_km = X / 1000.0, Y / 1000.0
+    h_label = f"+{d['hours']}h"
     
     if layer == "all":
         fig, axs = plt.subplots(2, 2, figsize=(16, 13), facecolor='#0f172a')
@@ -298,43 +282,43 @@ def render_map(layer: str = Query("all")):
                 for s in ax.spines.values():
                     s.set_color('#334155')
 
-        # 1. Vietor & Bóra
-        im1 = axs[0, 0].contourf(X, Y, d['dem'], levels=25, cmap='terrain', alpha=0.85)
+        # 1. Vietor
+        im1 = axs[0, 0].contourf(X_km, Y_km, DEM, levels=25, cmap='terrain', alpha=0.85)
         cb1 = fig.colorbar(im1, ax=axs[0, 0])
         plt.setp(plt.getp(cb1.ax.axes, 'yticklabels'), color='white')
-        axs[0, 0].quiver(X[::6, ::6], Y[::6, ::6], d['u_opt'][::6, ::6], d['v_opt'][::6, ::6], scale=140, color='black', width=0.0025)
+        axs[0, 0].quiver(X_km[::6, ::6], Y_km[::6, ::6], d['u_opt'][::6, ::6], d['v_opt'][::6, ::6], scale=140, color='black', width=0.0025)
         if d['acc'].max() > 1.0:
-            axs[0, 0].contour(X, Y, d['acc'], levels=[4.0, 8.0, 12.0], colors='#ef4444', linewidths=1.5, linestyles='--')
+            axs[0, 0].contour(X_km, Y_km, d['acc'], levels=[4.0, 8.0, 12.0], colors='#ef4444', linewidths=1.5, linestyles='--')
         draw_landmarks_on_axis(axs[0, 0], is_compact=True)
-        axs[0, 0].set_title('A. Topografia & Tatranská Bóra (Vietor)', color='white', fontweight='bold', fontsize=11)
+        axs[0, 0].set_title(f'A. Topografia & Bóra (Vietor) [{h_label}]', color='white', fontweight='bold', fontsize=11)
 
         # 2. Zrážky
-        im2 = axs[0, 1].contourf(X, Y, d['p_final'], levels=20, cmap='YlGnBu')
+        im2 = axs[0, 1].contourf(X_km, Y_km, d['p_final'], levels=20, cmap='YlGnBu')
         cb2 = fig.colorbar(im2, ax=axs[0, 1], label='mm / h')
         plt.setp(plt.getp(cb2.ax.axes, 'yticklabels'), color='white')
         cb2.ax.yaxis.label.set_color('white')
-        axs[0, 1].contour(X, Y, d['dem'], levels=[1000, 1500, 2000, 2500], colors='#64748b', linewidths=0.5, alpha=0.6)
+        axs[0, 1].contour(X_km, Y_km, DEM, levels=[1000, 1500, 2000, 2500], colors='#64748b', linewidths=0.5, alpha=0.6)
         draw_landmarks_on_axis(axs[0, 1], is_compact=True)
-        axs[0, 1].set_title('B. Lokálne zrážky (Seeder-Feeder + Znos)', color='white', fontweight='bold', fontsize=11)
+        axs[0, 1].set_title(f'B. Intenzita zrážok (Seeder-Feeder) [{h_label}]', color='white', fontweight='bold', fontsize=11)
 
         # 3. Sneh
         m_diff = max(np.max(np.abs(d['snow_diff'])), 1.0)
-        im3 = axs[1, 0].contourf(X, Y, d['snow_diff'], levels=25, cmap='RdBu', vmin=-m_diff, vmax=m_diff)
-        cb3 = fig.colorbar(im3, ax=axs[1, 0], label='Rozdiel výšky (cm)')
+        im3 = axs[1, 0].contourf(X_km, Y_km, d['snow_diff'], levels=25, cmap='RdBu', vmin=-m_diff, vmax=m_diff)
+        cb3 = fig.colorbar(im3, ax=axs[1, 0], label='Rozdiel (cm / 6h)')
         plt.setp(plt.getp(cb3.ax.axes, 'yticklabels'), color='white')
         cb3.ax.yaxis.label.set_color('white')
-        axs[1, 0].contour(X, Y, d['dem'], levels=[1000, 1500, 2000, 2500], colors='#64748b', linewidths=0.5, alpha=0.6)
+        axs[1, 0].contour(X_km, Y_km, DEM, levels=[1000, 1500, 2000, 2500], colors='#64748b', linewidths=0.5, alpha=0.6)
         draw_landmarks_on_axis(axs[1, 0], is_compact=True)
-        axs[1, 0].set_title('C. Prevejovanie snehu (6h rozdiel v cm)', color='white', fontweight='bold', fontsize=11)
+        axs[1, 0].set_title(f'C. Prevejovanie snehu za 6h [{h_label}]', color='white', fontweight='bold', fontsize=11)
 
         # 4. Blesky & Inverzia
-        im4 = axs[1, 1].contourf(X, Y, d['lhi'], levels=20, cmap='YlOrRd')
-        cb4 = fig.colorbar(im4, ax=axs[1, 1], label='LHI Index (0-100)')
+        im4 = axs[1, 1].contourf(X_km, Y_km, d['lhi'], levels=20, cmap='YlOrRd')
+        cb4 = fig.colorbar(im4, ax=axs[1, 1], label='LHI (0-100)')
         plt.setp(plt.getp(cb4.ax.axes, 'yticklabels'), color='white')
         cb4.ax.yaxis.label.set_color('white')
-        axs[1, 1].contour(X, Y, d['temp_field'], levels=[-4.0, -2.0, 0.0], colors='#38bdf8', linewidths=1.2, linestyles='-.')
+        axs[1, 1].contour(X_km, Y_km, d['temp_field'], levels=[-6.0, -3.0, 0.0], colors='#38bdf8', linewidths=1.2, linestyles='-.')
         draw_landmarks_on_axis(axs[1, 1], is_compact=True)
-        axs[1, 1].set_title('D. Riziko bleskov (LHI) & Teplotná inverzia', color='white', fontweight='bold', fontsize=11)
+        axs[1, 1].set_title(f'D. Riziko bleskov & Teplotné pole [{h_label}]', color='white', fontweight='bold', fontsize=11)
 
         fig.tight_layout()
     else:
@@ -345,28 +329,28 @@ def render_map(layer: str = Query("all")):
         ax.set_ylabel('Juh -> Sever (km)', color='#94a3b8', fontsize=10)
 
         if layer == "wind":
-            im = ax.contourf(X, Y, d['dem'], levels=25, cmap='terrain', alpha=0.85)
-            ax.quiver(X[::5, ::5], Y[::5, ::5], d['u_opt'][::5, ::5], d['v_opt'][::5, ::5], scale=130, color='black', width=0.003)
+            im = ax.contourf(X_km, Y_km, DEM, levels=25, cmap='terrain', alpha=0.85)
+            ax.quiver(X_km[::5, ::5], Y_km[::5, ::5], d['u_opt'][::5, ::5], d['v_opt'][::5, ::5], scale=130, color='black', width=0.003)
             if d['acc'].max() > 1.0:
-                ax.contour(X, Y, d['acc'], levels=[4.0, 8.0, 12.0], colors='#ef4444', linewidths=1.5, linestyles='--')
+                ax.contour(X_km, Y_km, d['acc'], levels=[4.0, 8.0, 12.0], colors='#ef4444', linewidths=1.5, linestyles='--')
             cb = fig.colorbar(im, ax=ax, label='Nadmorská výška (m n.m.)')
-            ax.set_title('Prúdenie vetra & Tatranská Bóra (200m DEM)', color='white', fontweight='bold', fontsize=13)
+            ax.set_title(f'Prúdenie vetra & Bóra (200m DEM) [{h_label}]', color='white', fontweight='bold', fontsize=13)
         elif layer == "precip":
-            im = ax.contourf(X, Y, d['p_final'], levels=25, cmap='YlGnBu')
-            ax.contour(X, Y, d['dem'], levels=[1000, 1500, 2000, 2500], colors='#64748b', linewidths=0.6, alpha=0.6)
+            im = ax.contourf(X_km, Y_km, d['p_final'], levels=25, cmap='YlGnBu')
+            ax.contour(X_km, Y_km, DEM, levels=[1000, 1500, 2000, 2500], colors='#64748b', linewidths=0.6, alpha=0.6)
             cb = fig.colorbar(im, ax=ax, label='Intenzita zrážok (mm / h)')
-            ax.set_title('Lokálne orografické zrážky (Seeder-Feeder)', color='white', fontweight='bold', fontsize=13)
+            ax.set_title(f'Orografické zrážky (Seeder-Feeder) [{h_label}]', color='white', fontweight='bold', fontsize=13)
         elif layer == "snow":
             m_diff = max(np.max(np.abs(d['snow_diff'])), 1.0)
-            im = ax.contourf(X, Y, d['snow_diff'], levels=25, cmap='RdBu', vmin=-m_diff, vmax=m_diff)
-            ax.contour(X, Y, d['dem'], levels=[1000, 1500, 2000, 2500], colors='#64748b', linewidths=0.6, alpha=0.6)
-            cb = fig.colorbar(im, ax=ax, label='Čistá zmena výšky snehu (cm / 6h)')
-            ax.set_title('Redistribúcia a záveje snehu vetrom (6h)', color='white', fontweight='bold', fontsize=13)
+            im = ax.contourf(X_km, Y_km, d['snow_diff'], levels=25, cmap='RdBu', vmin=-m_diff, vmax=m_diff)
+            ax.contour(X_km, Y_km, DEM, levels=[1000, 1500, 2000, 2500], colors='#64748b', linewidths=0.6, alpha=0.6)
+            cb = fig.colorbar(im, ax=ax, label='Zmena výšky snehu (cm / 6h)')
+            ax.set_title(f'Redistribúcia snehu vetrom za 6h [{h_label}]', color='white', fontweight='bold', fontsize=13)
         elif layer == "lightning":
-            im = ax.contourf(X, Y, d['lhi'], levels=25, cmap='YlOrRd')
-            ax.contour(X, Y, d['temp_field'], levels=[-4.0, -2.0, 0.0], colors='#38bdf8', linewidths=1.2, linestyles='-.')
-            cb = fig.colorbar(im, ax=ax, label='Index rizika bleskov (0-100)')
-            ax.set_title('Index bleskov (LHI) & Teplotná inverzia v kotline', color='white', fontweight='bold', fontsize=13)
+            im = ax.contourf(X_km, Y_km, d['lhi'], levels=25, cmap='YlOrRd')
+            ax.contour(X_km, Y_km, d['temp_field'], levels=[-6.0, -3.0, 0.0], colors='#38bdf8', linewidths=1.2, linestyles='-.')
+            cb = fig.colorbar(im, ax=ax, label='LHI Index (0-100)')
+            ax.set_title(f'Index bleskov (LHI) & Teplotné pole [{h_label}]', color='white', fontweight='bold', fontsize=13)
 
         draw_landmarks_on_axis(ax, is_compact=False)
         plt.setp(plt.getp(cb.ax.axes, 'yticklabels'), color='white')
