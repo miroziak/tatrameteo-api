@@ -13,6 +13,112 @@ import matplotlib.pyplot as plt
 from fastapi import FastAPI, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+@app.get("/api/hazards")
+def get_hazards_24h():
+    """Analyzuje extrémne prejavy počasia na najbližších 24 hodín (kroky 0 až 4)."""
+    hazards = []
+    base_dt = datetime.datetime.now()
+
+    # Prechádzame 24-hodinový horizont (kroky 0, 1, 2, 3, 4)
+    for step in range(5):
+        d = run_35_node_downscaled_step(step)
+        step_hours = step * 6
+        target_time = base_dt + datetime.timedelta(hours=step_hours)
+        time_str = target_time.strftime("%d.%m. %H:%M") + f" (+{step_hours}h)"
+
+        for p in TATRAS_CORE_POINTS:
+            px_m, py_m = p["x"] * 1000.0, p["y"] * 1000.0
+            ix = int(np.clip(px_m / DX, 0, DEM_100.shape[0] - 1))
+            iy = int(np.clip(py_m / DY, 0, DEM_100.shape[1] - 1))
+
+            spd = float(d['wind_spd'][ix, iy] * 3.6)
+            prec = float(d['p_final'][ix, iy])
+            sn = float(d['snow_diff'][ix, iy])
+            lh = float(d['lhi'][ix, iy])
+
+            # 1. Extrémny vietor a Bóra
+            if spd >= 105.0:
+                hazards.append({
+                    "severity": "extreme",
+                    "type": "Orkán / Extrémna víchrica",
+                    "icon": "fa-wind",
+                    "location": p["name"],
+                    "alt": p["alt"],
+                    "time": time_str,
+                    "value": f"{spd:.0f} km/h",
+                    "desc": "Kritická sila vetra na hrebeni. Zákaz pohybu na exponovaných trasách."
+                })
+            elif spd >= 80.0 and p["type"] in ["town", "hut"]:
+                hazards.append({
+                    "severity": "high",
+                    "type": "Tatranská Bóra / Silný vietor",
+                    "icon": "fa-wind",
+                    "location": p["name"],
+                    "alt": p["alt"],
+                    "time": time_str,
+                    "value": f"{spd:.0f} km/h",
+                    "desc": "Padavý nárazový vietor v lesnom pásme a dolinách. Riziko vývratov."
+                })
+
+            # 2. Riziko bleskov (LHI)
+            if lh >= 65.0:
+                hazards.append({
+                    "severity": "extreme",
+                    "type": "Akútne nebezpečenstvo bleskov",
+                    "icon": "fa-bolt",
+                    "location": p["name"],
+                    "alt": p["alt"],
+                    "time": time_str,
+                    "value": f"LHI {lh:.0f}/100",
+                    "desc": "Vysoká konvektívna nestabilita na hrebeni. Zostúpte do dolín."
+                })
+
+            # 3. Prívalové zrážky
+            if prec >= 12.0:
+                hazards.append({
+                    "severity": "high",
+                    "type": "Prívalový dážď",
+                    "icon": "fa-cloud-showers-water",
+                    "location": p["name"],
+                    "alt": p["alt"],
+                    "time": time_str,
+                    "value": f"{prec:.1f} mm/h",
+                    "desc": "Intenzívne zrážky. Riziko rozvodnenia horských potokov a strhnutia chodníkov."
+                })
+
+            # 4. Intenzívne snehové záveje
+            if sn >= 15.0:
+                hazards.append({
+                    "severity": "high",
+                    "type": "Snehová kalamita & Záveje",
+                    "icon": "fa-snowflake",
+                    "location": p["name"],
+                    "alt": p["alt"],
+                    "time": time_str,
+                    "value": f"+{sn:.0f} cm / 6h",
+                    "desc": "Masívne ukladanie naviateho snehu v žľaboch. Zvýšené lavínové riziko."
+                })
+
+    # Zoradenie: najprv extrémne, potom vysoké riziká
+    hazards.sort(key=lambda x: (0 if x["severity"] == "extreme" else 1))
+    
+    # Odstránenie duplicitných záznamov pre rovnaké miesto a čas
+    unique_hazards = []
+    seen = set()
+    for h in hazards:
+        key = (h["type"], h["location"], h["time"])
+        if key not in seen:
+            seen.add(key)
+            unique_hazards.append(h)
+
+    return {
+        "status": "ok",
+        "horizon": "24h",
+        "has_hazards": len(unique_hazards) > 0,
+        "count": len(unique_hazards),
+        "hazards": unique_hazards[:12]  # Vráti max 12 najdôležitejších udalostí
+    }
+
 app = FastAPI(
     title="TATRYS-50 v2 35-Node DWD ICON API | Avalanche.sk",
     description="Priestorový multi-grid numerický downscaling z 35 referenčných uzlov DWD ICON na 100m DEM Tatier.",
