@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.1.0"
+    version="4.1.1"
 )
 
 app.add_middleware(
@@ -262,11 +262,17 @@ def calculate_35_node_grid_state(step_idx: int):
         # 5. Sneh (iba ak mrzne a prší)
         snow_pt = (prec_pt * 1.0 * 6.0) if t_pt < 0.0 else 0.0
 
-        # 6. LHI
-        exposure = min(max(p["alt"] - 1000.0, 0.0) / 35.0, 45.0)
-        lhi_pt = min(max(exposure * 0.4 + (cape_dwd_local / 25.0), 0.0), 100.0)
-        if cape_dwd_local < 40.0 and prec_dwd_local == 0.0:
-            lhi_pt = min(lhi_pt * 0.1, 10.0)
+        # 6. LHI (Fyzikálne podmienené reálnou búrkovou instabilitou)
+        if cape_dwd_local < 150.0 and prec_dwd_local == 0.0:
+            lhi_pt = 0.0
+        else:
+            cape_component = min(cape_dwd_local / 25.0, 60.0)
+            exposure = min(max(p["alt"] - 1200.0, 0.0) / 40.0, 30.0)
+            exposure_factor = (cape_dwd_local / 500.0) if cape_dwd_local < 500.0 else 1.0
+            lhi_pt = min(cape_component + (exposure * exposure_factor), 100.0)
+            
+            if prec_dwd_local == 0.0 and cape_dwd_local < 300.0:
+                lhi_pt = min(lhi_pt, 10.0)
 
         results.append({
             "name": p["name"],
@@ -319,7 +325,6 @@ def get_hazards_48h():
     hazards = []
     base_dt = datetime.datetime.now()
 
-    # Prechádzame celých 48 hodín po 6h krokoch (0h, +6h, +12h, ..., +48h)
     for step in range(9):
         data = calculate_35_node_grid_state(step)
         target_time = base_dt + datetime.timedelta(hours=data["hours_ahead"])
@@ -389,7 +394,6 @@ def get_hazards_48h():
                     "desc": "Rýchly prírastok snehu a nafúkané snehové dosky v žľaboch."
                 })
 
-    # Odstránenie duplicitných záznamov
     unique_hazards = []
     seen = set()
     for h in hazards:
@@ -398,7 +402,6 @@ def get_hazards_48h():
             seen.add(key)
             unique_hazards.append(h)
 
-    # Zoradenie: najprv extrémne výstrahy
     unique_hazards.sort(key=lambda x: (0 if x["severity"] == "extreme" else 1))
 
     return {
@@ -406,7 +409,7 @@ def get_hazards_48h():
         "horizon": "48h",
         "has_hazards": len(unique_hazards) > 0,
         "count": len(unique_hazards),
-        "hazards": unique_hazards[:16]  # Max 16 najvýznamnejších výstrah na 2 dni
+        "hazards": unique_hazards[:16]
     }
 
 if __name__ == "__main__":
