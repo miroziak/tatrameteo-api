@@ -445,7 +445,8 @@ def get_hazards_48h():
         time_str = target_time.strftime("%d.%m. %H:%M") + f" (+{data['hours_ahead']}h)"
 
         for p in data["points"]:
-            if p["wind_kmh"] >= 105.0:
+            # 1. Silný vietor / Bóra (znížený limit z 80 na 65 km/h)
+            if p["wind_kmh"] >= 100.0:
                 hazards.append({
                     "severity": "extreme",
                     "type": "Orkán / Víchrica na hrebeni",
@@ -454,9 +455,9 @@ def get_hazards_48h():
                     "alt": p["alt"],
                     "time": time_str,
                     "value": f"{p['wind_kmh']} km/h",
-                    "desc": "Extrémna sila vetra na štítoch a exponovaných trasách."
+                    "desc": "Extrémna sila vetra na štítoch a exponowanych trasách."
                 })
-            elif p["wind_kmh"] >= 80.0 and p["cat"] in ["towns", "huts"]:
+            elif p["wind_kmh"] >= 65.0 and p["cat"] in ["towns", "huts"]:
                 hazards.append({
                     "severity": "high",
                     "type": "Tatranská Bóra / Silný vietor",
@@ -465,29 +466,33 @@ def get_hazards_48h():
                     "alt": p["alt"],
                     "time": time_str,
                     "value": f"{p['wind_kmh']} km/h",
-                    "desc": "Padavý vietor v lesnom pásme. Pozor na padajúce stromy a konáre."
+                    "desc": "Silný nárazový vietor v dolinách a osadách."
                 })
-            if p["lhi"] >= 65.0:
+                
+            # 2. Riziko bleskov (znížený limit LHI z 65 na 45)
+            if p["lhi"] >= 45.0:
                 hazards.append({
-                    "severity": "extreme",
+                    "severity": "high" if p["lhi"] < 70 else "extreme",
                     "type": "Riziko zásahu bleskom",
                     "icon": "fa-bolt",
                     "location": p["name"],
                     "alt": p["alt"],
                     "time": time_str,
                     "value": f"LHI {p['lhi']}/100",
-                    "desc": "Akútne nebezpečenstvo bleskov na vrcholoch a hrebeňoch."
+                    "desc": "Zvýšené až akútne nebezpečenstvo bleskov na hrebeňoch."
                 })
-            if p["precip_mmh"] >= 12.0:
+                
+            # 3. Prívalový lejak (znížený limit z 12 na 6 mm/h)
+            if p["precip_mmh"] >= 6.0:
                 hazards.append({
                     "severity": "high",
-                    "type": "Prívalový lejak",
+                    "type": "Intenzívny dážď / Lejak",
                     "icon": "fa-cloud-showers-water",
                     "location": p["name"],
                     "alt": p["alt"],
                     "time": time_str,
                     "value": f"{p['precip_mmh']} mm/h",
-                    "desc": "Intenzívne zrážky. Riziko rozvodnenia horských bystrín a strhnutia chodníkov."
+                    "desc": "Výraznejšie zrážky. Riziko stekania vody zo svahov."
                 })
             if p["snow_6h_cm"] >= 15.0:
                 hazards.append({
