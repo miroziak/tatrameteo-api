@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.2.2"
+    version="4.2.3"
 )
 
 app.add_middleware(
@@ -45,12 +45,10 @@ for gy in GRID_Y:
         DWD_LONS.append(round(lon, 4))
 
 # =============================================================================
-# 2. 200+ REÁLNYCH BODOV VYSOKÝCH A BELIANSKYCH TATIER
+# 2. 200+ REÁLNYCH BODOV VYSOKÝCH A BELIANSKYCH TATIER (SK + PL)
 # =============================================================================
 TATRAS_POINTS = [
-    # =========================================================================
-    # 1. ŠTÍTY (Slovenská aj Poľská strana)
-    # =========================================================================
+    # 1. Štíty
     {"name": "Gerlachovský štít", "alt": 2655, "x": 8000, "y": 6200, "lat": 49.1639, "lon": 20.1342, "cat": "peaks", "prio": 1},
     {"name": "Lomnický štít", "alt": 2634, "x": 12000, "y": 6800, "lat": 49.1953, "lon": 20.2131, "cat": "peaks", "prio": 1},
     {"name": "Ľadový štít", "alt": 2627, "x": 11000, "y": 8000, "lat": 49.1972, "lon": 20.1833, "cat": "peaks", "prio": 1},
@@ -111,9 +109,7 @@ TATRAS_POINTS = [
     {"name": "Hlúpy", "alt": 2061, "x": 14000, "y": 9800, "lat": 49.2361, "lon": 20.2306, "cat": "peaks", "prio": 2},
     {"name": "Muráň", "alt": 1890, "x": 11300, "y": 11500, "lat": 49.2500, "lon": 20.1694, "cat": "peaks", "prio": 2},
 
-    # =========================================================================
-    # 2. SEDLÁ
-    # =========================================================================
+    # 2. Sedlá
     {"name": "Poľský hrebeň", "alt": 2200, "x": 7900, "y": 6800, "lat": 49.1722, "lon": 20.1417, "cat": "passes", "prio": 1},
     {"name": "Prielom", "alt": 2290, "x": 8400, "y": 7200, "lat": 49.1750, "lon": 20.1500, "cat": "passes", "prio": 1},
     {"name": "Sedielko (Javorová / Malá Studená)", "alt": 2376, "x": 10500, "y": 7800, "lat": 49.1917, "lon": 20.1778, "cat": "passes", "prio": 1},
@@ -131,9 +127,7 @@ TATRAS_POINTS = [
     {"name": "Krzyżne (PL - koniec Orlej Perći)", "alt": 2112, "x": 6400, "y": 9500, "lat": 49.2239, "lon": 20.0464, "cat": "passes", "prio": 1},
     {"name": "Przełęcz pod Chłopkiem (PL/SK)", "alt": 2307, "x": 5900, "y": 6600, "lat": 49.1825, "lon": 20.0800, "cat": "passes", "prio": 1},
 
-    # =========================================================================
-    # 3. PLESÁ
-    # =========================================================================
+    # 3. Plesá
     {"name": "Morskie Oko (PL)", "alt": 1395, "x": 6100, "y": 7800, "lat": 49.2004, "lon": 20.0712, "cat": "lakes", "prio": 1},
     {"name": "Czarny Staw pod Rysami (PL)", "alt": 1583, "x": 6000, "y": 7100, "lat": 49.1886, "lon": 20.0767, "cat": "lakes", "prio": 1},
     {"name": "Wielki Staw Polski (PL - 5 Stawów)", "alt": 1665, "x": 5500, "y": 8600, "lat": 49.2117, "lon": 20.0306, "cat": "lakes", "prio": 1},
@@ -151,9 +145,7 @@ TATRAS_POINTS = [
     {"name": "Ťažké pleso (Bielovodská dolina)", "alt": 1611, "x": 6700, "y": 7500, "lat": 49.1889, "lon": 20.1028, "cat": "lakes", "prio": 2},
     {"name": "Žabie pleso Javorové", "alt": 1878, "x": 9800, "y": 8800, "lat": 49.1986, "lon": 20.1583, "cat": "lakes", "prio": 2},
 
-    # =========================================================================
-    # 4. CHATY A ÚTULNE
-    # =========================================================================
+    # 4. Chaty
     {"name": "Schronisko PTTK Morskie Oko (PL)", "alt": 1405, "x": 6100, "y": 7900, "lat": 49.2014, "lon": 20.0717, "cat": "huts", "prio": 1},
     {"name": "Schronisko w Dolinie Pięciu Stawów (PL)", "alt": 1671, "x": 5700, "y": 8700, "lat": 49.2139, "lon": 20.0486, "cat": "huts", "prio": 1},
     {"name": "Murowaniec Hala Gąsienicowa (PL)", "alt": 1500, "x": 4900, "y": 10800, "lat": 49.2436, "lon": 20.0072, "cat": "huts", "prio": 1},
@@ -173,9 +165,7 @@ TATRAS_POINTS = [
     {"name": "Chata Plesnivec (Belianske Tatry)", "alt": 1290, "x": 14500, "y": 9200, "lat": 49.2278, "lon": 20.2722, "cat": "huts", "prio": 1},
     {"name": "Horáreň Biela Voda (Bielovodská)", "alt": 995, "x": 8100, "y": 10500, "lat": 49.2528, "lon": 20.1000, "cat": "huts", "prio": 2},
 
-    # =========================================================================
-    # 5. OSADY A VÝCHODISKOVÉ BODY
-    # =========================================================================
+    # 5. Osady
     {"name": "Zakopane - Centrum (PL)", "alt": 838, "x": 2800, "y": 13500, "lat": 49.2992, "lon": 19.9489, "cat": "towns", "prio": 1},
     {"name": "Kuźnice (PL - dolná stanica Kasprowy)", "alt": 1010, "x": 3600, "y": 12200, "lat": 49.2694, "lon": 19.9806, "cat": "towns", "prio": 1},
     {"name": "Palenica Białczańska (PL - vstup Morskie Oko)", "alt": 984, "x": 7800, "y": 10200, "lat": 49.2550, "lon": 20.1031, "cat": "towns", "prio": 1},
@@ -226,7 +216,6 @@ def fetch_35_nodes_dwd():
 def calculate_35_node_grid_state(step_idx: int):
     hours_ahead = step_idx * 6
     
-    # Presný čas v stredoeurópskom pásme (Bratislava / Tatry)
     tz_sk = datetime.timezone(datetime.timedelta(hours=2))
     now_sk = datetime.datetime.now(tz_sk)
     target_dt = now_sk + datetime.timedelta(hours=hours_ahead)
@@ -241,14 +230,12 @@ def calculate_35_node_grid_state(step_idx: int):
     dwd_dem = np.zeros((7, 5))
 
     if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
-        # Vyhľadanie indexu presného cieľového času v zozname DWD
         time_list = dwd_raw[0].get("hourly", {}).get("time", [])
         target_iso_prefix = target_dt.strftime("%Y-%m-%dT%H:00")
         
         try:
             data_idx = time_list.index(target_iso_prefix)
         except (ValueError, IndexError):
-            # Záložný výpočet indexu, ak presný reťazec nesedí
             data_idx = min(target_dt.hour + (target_dt.day - now_sk.day) * 24, len(time_list) - 1)
 
         idx = 0
@@ -308,18 +295,18 @@ def calculate_35_node_grid_state(step_idx: int):
         prec_pt = prec_dwd_local * p_factor if prec_dwd_local > 0.0 else 0.0
         snow_pt = (prec_pt * 1.0 * 6.0) if t_pt < 0.0 else 0.0
 
-        # Dynamický LHI výpočet bez umelého nulovania
-        if cape_dwd_local < 50.0 and prec_dwd_local == 0.0:
+        # Agresívnejší LHI výpočet pre okamžitú reakciu na výstrahy
+        if cape_dwd_local < 20.0 and prec_dwd_local == 0.0:
             lhi_pt = 0.0
         else:
-            cape_score = min(max((cape_dwd_local - 40.0) / 18.0, 0.0), 55.0)
-            precip_score = min(prec_dwd_local * 12.0, 35.0)
-            
-            exposure_base = min(max(p["alt"] - 1300.0, 0.0) / 75.0, 15.0)
-            lability_weight = min(max((cape_dwd_local - 80.0) / 350.0, 0.0), 1.0)
-            exposure_score = exposure_base * lability_weight
+            cape_score = min(max(cape_dwd_local / 12.0, 0.0), 65.0)
+            precip_score = min(prec_dwd_local * 15.0, 40.0)
+            exposure_score = min(max(p["alt"] - 1200.0, 0.0) / 45.0, 30.0)
             
             lhi_pt = min(cape_score + precip_score + exposure_score, 100.0)
+            
+            if prec_dwd_local == 0.0 and cape_dwd_local < 40.0:
+                lhi_pt = min(lhi_pt, 15.0)
 
         results.append({
             "name": p["name"],
