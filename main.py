@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.2.0"
+    version="4.2.1"
 )
 
 app.add_middleware(
@@ -254,14 +254,21 @@ def calculate_35_node_grid_state(step_idx: int):
         prec_pt = prec_dwd_local * p_factor if prec_dwd_local > 0.0 else 0.0
         snow_pt = (prec_pt * 1.0 * 6.0) if t_pt < 0.0 else 0.0
 
-        if prec_dwd_local == 0.0 and cape_dwd_local < 600.0:
-            lhi_pt = min(cape_dwd_local / 120.0, 5.0)
+        # 6. LHI (Lightning Hazard Index - vyvážený pre predfrontálnu aj orografickú labilitu)
+        if cape_dwd_local < 80.0 and prec_dwd_local == 0.0:
+            lhi_pt = 0.0
         else:
-            cape_score = min(cape_dwd_local / 20.0, 50.0)
-            precip_score = min(prec_dwd_local * 8.0, 30.0)
-            exposure = min(max(p["alt"] - 1200.0, 0.0) / 50.0, 20.0)
-            trigger_weight = min((cape_dwd_local / 800.0) + (prec_dwd_local / 2.0), 1.0)
-            lhi_pt = min(cape_score + precip_score + (exposure * trigger_weight), 100.0)
+            cape_score = min(max((cape_dwd_local - 50.0) / 20.0, 0.0), 55.0)
+            precip_score = min(prec_dwd_local * 10.0, 30.0)
+            
+            exposure_base = min(max(p["alt"] - 1300.0, 0.0) / 80.0, 15.0)
+            lability_weight = min(max((cape_dwd_local - 100.0) / 400.0, 0.0), 1.0)
+            exposure_score = exposure_base * lability_weight
+            
+            lhi_pt = min(cape_score + precip_score + exposure_score, 100.0)
+            
+            if t_pt < -10.0 and prec_dwd_local == 0.0:
+                lhi_pt = min(lhi_pt, 5.0)
 
         results.append({
             "name": p["name"],
@@ -297,7 +304,6 @@ def fetch_sounding_ganovce():
     if SOUNDING_CACHE["data"] and (now - SOUNDING_CACHE["ts"] < 900):
         return SOUNDING_CACHE["data"]
 
-    # Open-Meteo vertikálny stĺpec nad Popradom-Gánovcami
     url = (
         "https://api.open-meteo.com/v1/forecast?"
         "latitude=49.035&longitude=20.323&hourly="
@@ -320,7 +326,6 @@ def fetch_sounding_ganovce():
             t_surface = h.get("temperature_2m", [18.0])[cur_h]
             rh_surface = h.get("relative_humidity_2m", [60.0])[cur_h]
 
-            # Odhad mrazovej hladiny (0 °C izoterma)
             t_850 = h.get("temperature_850hPa", [12.0])[cur_h]
             t_700 = h.get("temperature_700hPa", [3.0])[cur_h]
             t_500 = h.get("temperature_500hPa", [-14.0])[cur_h]
