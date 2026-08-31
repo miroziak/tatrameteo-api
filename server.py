@@ -10,6 +10,37 @@ from wind_engine import calculate_unified_microclimate
 import requests
 from flask import jsonify
 
+def init_sounding_table():
+    """Automaticky vytvorí tabuľku pre rádiosondáž v PostgreSQL, ak ešte neexistuje."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sounding_observations (
+                id SERIAL PRIMARY KEY,
+                station_id VARCHAR(30) NOT NULL,
+                station_name VARCHAR(100) NOT NULL,
+                launch_time TIMESTAMP WITH TIME ZONE NOT NULL UNIQUE,
+                elevation_m INT DEFAULT 706,
+                freezing_level_m INT,
+                inversion_detected BOOLEAN DEFAULT FALSE,
+                cape_j_kg NUMERIC(6, 1),
+                profile_json JSONB NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_sounding_launch_time 
+            ON sounding_observations (launch_time DESC);
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("Tabuľka 'sounding_observations' je pripravená.")
+    except Exception as e:
+        print("Chyba pri inicializácii tabuľky:", e)
+
+# Zavolaj funkciu pred spustením aplikácie:
+init_sounding_table()
+
 @app.route('/api/sounding', methods=['GET'])
 def get_sounding():
     try:
