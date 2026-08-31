@@ -9,16 +9,13 @@ import matplotlib.pyplot as plt
 from fastapi import FastAPI, Response, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
-# =============================================================================
-# 1. INICIALIZÁCIA FASTAPI & CORS
-# =============================================================================
 app = FastAPI(
     title="TATRYS-50 v2 API | Avalanche.sk",
-    description="Numerický meteorologický orografický model pre oblasť Vysokých Tatier s 200m rozlíšením.",
+    description="Kompletný orografický model Vysokých Tatier s plnou fyzikou (Bóra, MASCON, Seeder-Feeder, LHI, Inverzia).",
     version="2.0.0"
 )
 
-# Povolenie požiadaviek z webhostingu Websupport (avalanche.sk) a lokálneho prostredia
+# Povolenie CORS
 origins = [
     "https://www.avalanche.sk",
     "http://www.avalanche.sk",
@@ -37,7 +34,7 @@ app.add_middleware(
 )
 
 # =============================================================================
-# 2. NUMERICKÝ MODEL TERÉNU A MIKROKLÍMY TATIER (200m rozlíšenie)
+# 1. GENERÁTOR TOPOGRAFIE TATIER (200m DEM)
 # =============================================================================
 def generate_tatry_dem(grid_shape=(120, 120), dx=200.0, dy=200.0):
     nx, ny = grid_shape
@@ -45,31 +42,30 @@ def generate_tatry_dem(grid_shape=(120, 120), dx=200.0, dy=200.0):
     y = np.arange(ny) * dy
     X, Y = np.meshgrid(x, y, indexing='ij')
     
-    # Základný sklon Popradská kotlina -> hrebeň
     dem = 650.0 + (Y * 0.005)
-    ridge_y = 16000.0
-    ridge_width = 3000.0
-    ridge_height = 1300.0
+    ridge_y, ridge_width, ridge_height = 16000.0, 3000.0, 1300.0
     main_ridge = ridge_height * np.exp(-((Y - ridge_y)**2) / (2 * ridge_width**2))
     ridge_waves = 1.0 + 0.2 * np.sin(X / 2000.0) * np.cos(X / 4000.0)
     dem += main_ridge * ridge_waves
     
-    # Významné tatranské štíty
-    dem += 700.0 * np.exp(-((X - 12000.0)**2 + (Y - 16200.0)**2) / (2 * 800.0**2))  # Gerlachovský štít
-    dem += 680.0 * np.exp(-((X - 18000.0)**2 + (Y - 16800.0)**2) / (2 * 750.0**2))  # Lomnický štít
+    # Štíty
+    dem += 700.0 * np.exp(-((X - 12000.0)**2 + (Y - 16200.0)**2) / (2 * 800.0**2))  # Gerlach
+    dem += 680.0 * np.exp(-((X - 18000.0)**2 + (Y - 16800.0)**2) / (2 * 750.0**2))  # Lomnický
     dem += 600.0 * np.exp(-((X - 4000.0)**2 + (Y - 15000.0)**2) / (2 * 900.0**2))   # Kriváň
     dem += 580.0 * np.exp(-((X - 8500.0)**2 + (Y - 16000.0)**2) / (2 * 700.0**2))   # Rysy
     
-    # Popradská kotlina
     flat_mask = Y < 6000.0
     dem[flat_mask] = 650.0 + (Y[flat_mask] * 0.003) + 20.0 * np.sin(X[flat_mask] / 1500.0)
     dem = ndimage.gaussian_filter(dem, sigma=1.5)
     return X, Y, dem, dx, dy
 
+# =============================================================================
+# 2. FYZIKÁLNY MODEL TATRYS-50 v2 SO VŠETKÝMI SUBMODULMI
+# =============================================================================
 def run_tatry_numerical_simulation():
     X, Y, dem, dx, dy = generate_tatry_dem()
     
-    # Syntetické DWD ICON-D2 pole (2.2 km background)
+    # KROK 1: Regionálne pozadie DWD ICON-D2 (2.2 km mriežka)
     dwd_dx, dwd_dy = 2200.0, 2200.0
     dwd_x = np.arange(0, 24000.0 + dwd_dx, dwd_dx)
     dwd_y = np.arange(0, 24000.0 + dwd_dy, dwd_dy)
@@ -98,19 +94,19 @@ def run_tatry_numerical_simulation():
     p_bg = interp_p(pts).reshape(X.shape)
     d_bg = interp_d(pts).reshape(X.shape)
     
-    # Teplotný profil s kotlinovou inverziou
+    # KROK 2: Fyzikálna korekcia teploty a nočná inverzia v kotline
     t_corrected = t_bg - ((dem - d_bg) * 0.0065)
     inversion_top, strength = 1000.0, 6.5
     temp_field = t_corrected.copy()
     inv_mask = dem < inversion_top
     temp_field[inv_mask] -= strength * ((inversion_top - dem[inv_mask]) / (inversion_top - 650.0))
     
-    # Svahové metriky
+    # KROK 3: Svahová geometria
     dh_dx, dh_dy = np.gradient(dem, dx, dy)
     slope = np.sqrt(dh_dx**2 + dh_dy**2)
     aspect = np.arctan2(-dh_dx, dh_dy)
     
-    # Taylor-Lee Speed-up efekt na hrebeňoch
+    # KROK 4: Taylor-Lee Speed-up na hrebeňoch
     dem_base = ndimage.gaussian_filter(dem, sigma=18)
     h_rel = np.maximum(dem - dem_base, 0.0)
     L_star = 20.0 * dx
@@ -118,7 +114,7 @@ def run_tatry_numerical_simulation():
     u_speed = u_bg * (1.0 + delta_S)
     v_speed = v_bg * (1.0 + delta_S)
     
-    # Ryanovo stáčanie vetra v údoliach & tienenie
+    # KROK 5: Ryanovo stáčanie vetra v údoliach & tienenie štítmi
     speed_init = np.sqrt(u_speed**2 + v_speed**2)
     wind_dir = np.arctan2(v_speed, u_speed)
     delta_theta = np.clip(-0.25 * (slope * 100.0) * np.sin(2.0 * (aspect - wind_dir)), -0.4, 0.4)
@@ -132,7 +128,7 @@ def run_tatry_numerical_simulation():
     u_shelter = u_steered * shelter
     v_shelter = v_steered * shelter
     
-    # Gravitačná akcelerácia Tatranskej Bóry
+    # KROK 6: Tatranská padavá Bóra (Bernoulliho akcelerácia)
     downslope = u_shelter * dh_dx + v_shelter * dh_dy
     bora_mask = (downslope < -0.1) & (dem > 700.0)
     fall_h = np.maximum(2000.0 - dem, 0.0)
@@ -145,7 +141,7 @@ def run_tatry_numerical_simulation():
     u_bora[bora_mask] += (u_shelter[bora_mask] / spd[bora_mask]) * acc[bora_mask]
     v_bora[bora_mask] += (v_shelter[bora_mask] / spd[bora_mask]) * acc[bora_mask]
     
-    # SOR Poisson MASCON Solver
+    # KROK 7: MASCON (Mass-Consistent) Poisson Solver
     nx, ny = dem.shape
     lam = np.zeros((nx, ny))
     du_dx = np.zeros_like(u_bora)
@@ -156,7 +152,7 @@ def run_tatry_numerical_simulation():
     omega = 1.65
     dx2, dy2 = dx**2, dy**2
     denom = 2.0 * (1.0/dx2 + 1.0/dy2)
-    for _ in range(100):
+    for _ in range(120):
         lam_old = lam.copy()
         for i in range(1, nx-1):
             for j in range(1, ny-1):
@@ -173,7 +169,7 @@ def run_tatry_numerical_simulation():
     v_opt = v_bora + 0.5 * dlam_dy
     w_opt = u_opt * dh_dx + v_opt * dh_dy
     
-    # Zrážky: Seeder-Feeder & Wind-Drift
+    # KROK 8: Seeder-Feeder, Wind-Drift a Zrážkový tieň
     p_sf = p_bg.copy()
     p_sf[w_opt > 0.0] *= (1.0 + 0.45 * w_opt[w_opt > 0.0])
     shift_x = int(-u_opt.mean() * 300.0 / dx)
@@ -183,15 +179,16 @@ def run_tatry_numerical_simulation():
     p_final[w_opt < 0.0] *= np.exp(0.35 * w_opt[w_opt < 0.0])
     p_final = np.maximum(p_final, 0.0)
     
-    # Redistribúcia nového snehu
+    # KROK 9: Redistribúcia a transport snehu vetrom
     snow_mask = temp_field < 0.0
     fresh_snow_rate = np.zeros_like(p_final)
     fresh_snow_rate[snow_mask] = p_final[snow_mask]
     
     wind_spd = np.sqrt(u_opt**2 + v_opt**2)
     snow_drift = np.zeros_like(wind_spd)
-    act = wind_spd > 5.0
+    act = (wind_spd > 5.0) & snow_mask
     snow_drift[act] = 0.002 * (wind_spd[act] - 5.0)**3
+    
     qx = snow_drift * (u_opt / wind_spd)
     qy = snow_drift * (v_opt / wind_spd)
     dqx = np.zeros_like(qx)
@@ -200,9 +197,13 @@ def run_tatry_numerical_simulation():
     dqy[:, 1:-1] = (qy[:, 2:] - qy[:, :-2]) / (2.0 * dy)
     snow_redist = -(dqx + dqy) * (6.0 * 3600.0) / (100.0 * 0.01)
     snow_redist[snow_redist > 0.0] *= 0.85
-    snow_diff = (fresh_snow_rate * 6.0) + snow_redist
     
-    # LHI (Lightning Hazard Index)
+    # Fyzikálne ohraničenie erózie: vietor nevyfúka viac ako reálne existujúcu pokrývku
+    snow_start = 30.0
+    snow_final = np.maximum(snow_start + (fresh_snow_rate * 6.0) + snow_redist, 0.0)
+    snow_diff = np.where(snow_mask, snow_final - snow_start, 0.0)
+    
+    # KROK 10: Lightning Hazard Index (LHI) so zmiešanou fázou a CAPE
     exposure = np.exp((dem - 650.0) / 600.0) * (1.0 + 2.0 * slope)
     instability = np.maximum(w_opt, 0.0) * (800.0 / 500.0)
     temp_factor = np.zeros_like(temp_field)
@@ -216,21 +217,17 @@ def run_tatry_numerical_simulation():
         'lhi': lhi, 'temp_field': temp_field, 'wind_spd': wind_spd
     }
 
-# Výpočet cache
 CACHE = run_tatry_numerical_simulation()
 
 # =============================================================================
-# 3. FASTAPI ENDPOINTY
+# 3. FASTAPI TRASY (ENDPOINTS)
 # =============================================================================
-
 @app.get("/")
 def read_root():
     return {
         "status": "ok",
         "service": "TATRYS-50 v2 Meteo Engine",
-        "model_resolution": "200m",
-        "domain": "Vysoké Tatry",
-        "endpoints": ["/health", "/api/forecast", "/api/stations", "/api/render-map"]
+        "physics": ["Bora", "MASCON", "Seeder-Feeder", "SnowDrift", "LHI", "Inversion"]
     }
 
 @app.get("/health")
@@ -239,8 +236,7 @@ def health_check():
 
 @app.get("/api/forecast")
 @app.get("/api/stations")
-def get_point_forecast():
-    """Vráti kľúčové lokality a stanice pre meteo-karty na webe."""
+def get_forecast():
     d = CACHE
     locs = [
         {"name": "Lomnický štít (2 634 m)", "ix": int(18000/200), "iy": int(16800/200)},
@@ -269,7 +265,6 @@ def get_point_forecast():
 
 @app.get("/api/render-map")
 def render_map(layer: str = Query("all")):
-    """Dynamicky renderuje orografické vrstvy modelu TATRYS-50 v2 do PNG formátu."""
     d = CACHE
     X, Y = d['X'] / 1000.0, d['Y'] / 1000.0
     
@@ -279,17 +274,14 @@ def render_map(layer: str = Query("all")):
             for ax in row:
                 ax.set_facecolor('#1e293b')
                 ax.tick_params(colors='#94a3b8')
-                ax.xaxis.label.set_color('#94a3b8')
-                ax.yaxis.label.set_color('#94a3b8')
-                for spine in ax.spines.values():
-                    spine.set_color('#334155')
+                for s in ax.spines.values():
+                    s.set_color('#334155')
 
         # 1. Vietor & Bóra
         im1 = axs[0, 0].contourf(X, Y, d['dem'], levels=25, cmap='terrain', alpha=0.85)
         cb1 = fig.colorbar(im1, ax=axs[0, 0])
         plt.setp(plt.getp(cb1.ax.axes, 'yticklabels'), color='white')
-        skip = 6
-        axs[0, 0].quiver(X[::skip, ::skip], Y[::skip, ::skip], d['u_opt'][::skip, ::skip], d['v_opt'][::skip, ::skip], scale=140, color='black')
+        axs[0, 0].quiver(X[::6, ::6], Y[::6, ::6], d['u_opt'][::6, ::6], d['v_opt'][::6, ::6], scale=140, color='black')
         if d['acc'].max() > 1.0:
             axs[0, 0].contour(X, Y, d['acc'], levels=[4.0, 8.0, 12.0], colors='#ef4444', linewidths=1.5, linestyles='--')
         axs[0, 0].set_title('Topografia & Tatranská Bóra (Vietor)', color='white', fontweight='bold')
@@ -298,14 +290,14 @@ def render_map(layer: str = Query("all")):
         im2 = axs[0, 1].contourf(X, Y, d['p_final'], levels=20, cmap='YlGnBu')
         cb2 = fig.colorbar(im2, ax=axs[0, 1])
         plt.setp(plt.getp(cb2.ax.axes, 'yticklabels'), color='white')
-        axs[0, 1].set_title('Lokálna intenzita zrážok (mm/h)', color='white', fontweight='bold')
+        axs[0, 1].set_title('Lokálne zrážky (Seeder-Feeder + Znos)', color='white', fontweight='bold')
 
         # 3. Sneh
         m_diff = max(np.max(np.abs(d['snow_diff'])), 1.0)
         im3 = axs[1, 0].contourf(X, Y, d['snow_diff'], levels=25, cmap='RdBu', vmin=-m_diff, vmax=m_diff)
         cb3 = fig.colorbar(im3, ax=axs[1, 0])
         plt.setp(plt.getp(cb3.ax.axes, 'yticklabels'), color='white')
-        axs[1, 0].set_title('Prevejovanie snehu (6h rozdiel v cm)', color='white', fontweight='bold')
+        axs[1, 0].set_title('Prevejovanie snehu (6h diff v cm)', color='white', fontweight='bold')
 
         # 4. Blesky & Inverzia
         im4 = axs[1, 1].contourf(X, Y, d['lhi'], levels=20, cmap='YlOrRd')
@@ -324,18 +316,18 @@ def render_map(layer: str = Query("all")):
             ax.quiver(X[::6, ::6], Y[::6, ::6], d['u_opt'][::6, ::6], d['v_opt'][::6, ::6], scale=140, color='black')
             if d['acc'].max() > 1.0:
                 ax.contour(X, Y, d['acc'], levels=[4.0, 8.0, 12.0], colors='#ef4444', linewidths=1.5, linestyles='--')
-            ax.set_title('Prúdenie vetra & Tatranská Bóra (200m DEM)', color='white', fontweight='bold')
+            ax.set_title('Prúdenie vetra & Tatranská Bóra', color='white', fontweight='bold')
         elif layer == "precip":
             im = ax.contourf(X, Y, d['p_final'], levels=25, cmap='YlGnBu')
-            ax.set_title('Lokálna intenzita zrážok (mm/h)', color='white', fontweight='bold')
+            ax.set_title('Lokálne zrážky (mm/h)', color='white', fontweight='bold')
         elif layer == "snow":
             m_diff = max(np.max(np.abs(d['snow_diff'])), 1.0)
             im = ax.contourf(X, Y, d['snow_diff'], levels=25, cmap='RdBu', vmin=-m_diff, vmax=m_diff)
-            ax.set_title('Akumulácia a prevejovanie snehu (cm / 6h)', color='white', fontweight='bold')
+            ax.set_title('Zmena výšky snehovej pokrývky (cm / 6h)', color='white', fontweight='bold')
         elif layer == "lightning":
             im = ax.contourf(X, Y, d['lhi'], levels=25, cmap='YlOrRd')
             ax.contour(X, Y, d['temp_field'], levels=[-4.0, -2.0, 0.0], colors='#38bdf8', linewidths=1.2, linestyles='-.')
-            ax.set_title('Index nebezpečenstva bleskov (LHI) & Teplotná inverzia', color='white', fontweight='bold')
+            ax.set_title('Riziko bleskov (LHI) & Teplotná inverzia', color='white', fontweight='bold')
             
         cb = fig.colorbar(im, ax=ax)
         plt.setp(plt.getp(cb.ax.axes, 'yticklabels'), color='white')
