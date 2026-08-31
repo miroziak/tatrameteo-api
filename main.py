@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.1.1"
+    version="4.1.2"
 )
 
 app.add_middleware(
@@ -262,17 +262,19 @@ def calculate_35_node_grid_state(step_idx: int):
         # 5. Sneh (iba ak mrzne a prší)
         snow_pt = (prec_pt * 1.0 * 6.0) if t_pt < 0.0 else 0.0
 
-        # 6. LHI (Fyzikálne podmienené reálnou búrkovou instabilitou)
-        if cape_dwd_local < 150.0 and prec_dwd_local == 0.0:
-            lhi_pt = 0.0
+        # 6. LHI (Fyzikálne podmienené reálnou búrkovou instabilitou a zrážkami)
+        if prec_dwd_local == 0.0 and cape_dwd_local < 600.0:
+            # Pokojná atmosféra bez zrážok = bezpečno (0 až 5)
+            lhi_pt = min(cape_dwd_local / 120.0, 5.0)
         else:
-            cape_component = min(cape_dwd_local / 25.0, 60.0)
-            exposure = min(max(p["alt"] - 1200.0, 0.0) / 40.0, 30.0)
-            exposure_factor = (cape_dwd_local / 500.0) if cape_dwd_local < 500.0 else 1.0
-            lhi_pt = min(cape_component + (exposure * exposure_factor), 100.0)
+            # Aktívna konvekcia alebo vysoká labilita (CAPE >= 600 J/kg alebo zrážky > 0)
+            cape_score = min(cape_dwd_local / 20.0, 50.0)
+            precip_score = min(prec_dwd_local * 8.0, 30.0)
             
-            if prec_dwd_local == 0.0 and cape_dwd_local < 300.0:
-                lhi_pt = min(lhi_pt, 10.0)
+            exposure = min(max(p["alt"] - 1200.0, 0.0) / 50.0, 20.0)
+            trigger_weight = min((cape_dwd_local / 800.0) + (prec_dwd_local / 2.0), 1.0)
+            
+            lhi_pt = min(cape_score + precip_score + (exposure * trigger_weight), 100.0)
 
         results.append({
             "name": p["name"],
