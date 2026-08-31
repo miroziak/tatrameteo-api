@@ -314,15 +314,19 @@ def get_points_grid(step: int = Query(0, ge=0, le=8)):
     return calculate_35_node_grid_state(step)
 
 @app.get("/api/hazards")
-def get_hazards_24h():
+def get_hazards_48h():
+    """Analyzuje extrémne prejavy počasia na celých 48 hodín (kroky 0 až 8)."""
     hazards = []
     base_dt = datetime.datetime.now()
 
-    for step in range(5):
+    # Prechádzame celých 48 hodín po 6h krokoch (0h, +6h, +12h, ..., +48h)
+    for step in range(9):
         data = calculate_35_node_grid_state(step)
-        t_str = (base_dt + datetime.timedelta(hours=data["hours_ahead"])).strftime("%d.%m. %H:%M") + f" (+{data['hours_ahead']}h)"
+        target_time = base_dt + datetime.timedelta(hours=data["hours_ahead"])
+        time_str = target_time.strftime("%d.%m. %H:%M") + f" (+{data['hours_ahead']}h)"
 
         for p in data["points"]:
+            # 1. Extrémny vietor / Orkán
             if p["wind_kmh"] >= 105.0:
                 hazards.append({
                     "severity": "extreme",
@@ -330,7 +334,7 @@ def get_hazards_24h():
                     "icon": "fa-wind",
                     "location": p["name"],
                     "alt": p["alt"],
-                    "time": t_str,
+                    "time": time_str,
                     "value": f"{p['wind_kmh']} km/h",
                     "desc": "Extrémna sila vetra na štítoch a exponovaných trasách."
                 })
@@ -341,10 +345,12 @@ def get_hazards_24h():
                     "icon": "fa-wind",
                     "location": p["name"],
                     "alt": p["alt"],
-                    "time": t_str,
+                    "time": time_str,
                     "value": f"{p['wind_kmh']} km/h",
-                    "desc": "Padavý vietor v lesnom pásme. Pozor na padajúce konáre."
+                    "desc": "Padavý vietor v lesnom pásme. Pozor na padajúce stromy a konáre."
                 })
+                
+            # 2. Riziko bleskov (LHI)
             if p["lhi"] >= 65.0:
                 hazards.append({
                     "severity": "extreme",
@@ -352,10 +358,12 @@ def get_hazards_24h():
                     "icon": "fa-bolt",
                     "location": p["name"],
                     "alt": p["alt"],
-                    "time": t_str,
+                    "time": time_str,
                     "value": f"LHI {p['lhi']}/100",
                     "desc": "Akútne nebezpečenstvo bleskov na vrcholoch a hrebeňoch."
                 })
+                
+            # 3. Prívalový lejak
             if p["precip_mmh"] >= 12.0:
                 hazards.append({
                     "severity": "high",
@@ -363,10 +371,12 @@ def get_hazards_24h():
                     "icon": "fa-cloud-showers-water",
                     "location": p["name"],
                     "alt": p["alt"],
-                    "time": t_str,
+                    "time": time_str,
                     "value": f"{p['precip_mmh']} mm/h",
-                    "desc": "Intenzívne zrážky. Riziko rozvodnenia horských bystrín."
+                    "desc": "Intenzívne zrážky. Riziko rozvodnenia horských bystrín a strhnutia chodníkov."
                 })
+                
+            # 4. Snehová kalamita & záveje
             if p["snow_6h_cm"] >= 15.0:
                 hazards.append({
                     "severity": "high",
@@ -374,11 +384,12 @@ def get_hazards_24h():
                     "icon": "fa-snowflake",
                     "location": p["name"],
                     "alt": p["alt"],
-                    "time": t_str,
-                    "value": f"+{p['snow_6h_cm']} cm",
-                    "desc": "Rýchly prírastok snehu a nafúkané snehové dosky."
+                    "time": time_str,
+                    "value": f"+{p['snow_6h_cm']} cm / 6h",
+                    "desc": "Rýchly prírastok snehu a nafúkané snehové dosky v žľaboch."
                 })
 
+    # Odstránenie duplicitných záznamov
     unique_hazards = []
     seen = set()
     for h in hazards:
@@ -387,12 +398,15 @@ def get_hazards_24h():
             seen.add(key)
             unique_hazards.append(h)
 
+    # Zoradenie: najprv extrémne výstrahy
     unique_hazards.sort(key=lambda x: (0 if x["severity"] == "extreme" else 1))
+
     return {
         "status": "ok",
+        "horizon": "48h",
         "has_hazards": len(unique_hazards) > 0,
         "count": len(unique_hazards),
-        "hazards": unique_hazards[:12]
+        "hazards": unique_hazards[:16]  # Max 16 najvýznamnejších výstrah na 2 dni
     }
 
 if __name__ == "__main__":
