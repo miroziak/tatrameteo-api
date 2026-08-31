@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.2.4"
+    version="4.2.5"
 )
 
 app.add_middleware(
@@ -48,7 +48,6 @@ for gy in GRID_Y:
 # 2. 200+ REÁLNYCH BODOV VYSOKÝCH A BELIANSKYCH TATIER (SK + PL)
 # =============================================================================
 TATRAS_POINTS = [
-    # 1. Štíty
     {"name": "Gerlachovský štít", "alt": 2655, "x": 8000, "y": 6200, "lat": 49.1639, "lon": 20.1342, "cat": "peaks", "prio": 1},
     {"name": "Lomnický štít", "alt": 2634, "x": 12000, "y": 6800, "lat": 49.1953, "lon": 20.2131, "cat": "peaks", "prio": 1},
     {"name": "Ľadový štít", "alt": 2627, "x": 11000, "y": 8000, "lat": 49.1972, "lon": 20.1833, "cat": "peaks", "prio": 1},
@@ -181,9 +180,6 @@ TATRAS_POINTS = [
     {"name": "Podbanské", "alt": 940, "x": 1000, "y": 1000, "lat": 49.1417, "lon": 19.9028, "cat": "towns", "prio": 1}
 ]
 
-# =============================================================================
-# 3. SŤAHOVANIE PARALELNEJ 35-BODOVEJ MATICE DWD ICON
-# =============================================================================
 CACHE = {"ts": 0, "matrix": None}
 
 def fetch_35_nodes_dwd():
@@ -210,12 +206,8 @@ def fetch_35_nodes_dwd():
         print(f"[VAROVANIE] Multi-point DWD zlyhalo: {e}")
         return None
 
-# =============================================================================
-# 4. VEKTOROVÝ VÝPOČET 200+ BODOV Z 35-BODOVÉHO DWD POĽA
-# =============================================================================
 def calculate_35_node_grid_state(step_idx: int):
     hours_ahead = step_idx * 6
-    
     tz_sk = datetime.timezone(datetime.timedelta(hours=2))
     now_sk = datetime.datetime.now(tz_sk)
     target_dt = now_sk + datetime.timedelta(hours=hours_ahead)
@@ -232,7 +224,6 @@ def calculate_35_node_grid_state(step_idx: int):
     if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
         time_list = dwd_raw[0].get("hourly", {}).get("time", [])
         target_iso_prefix = target_dt.strftime("%Y-%m-%dT%H:00")
-        
         try:
             data_idx = time_list.index(target_iso_prefix)
         except (ValueError, IndexError):
@@ -269,7 +260,6 @@ def calculate_35_node_grid_state(step_idx: int):
     results = []
     for p in TATRAS_POINTS:
         px, py = float(p["x"]), float(p["y"])
-
         t_dwd_local = float(it_t([px, py])[0])
         dem_dwd_local = float(it_dem([px, py])[0])
         wspd_dwd_local = float(it_wspd([px, py])[0])
@@ -301,39 +291,19 @@ def calculate_35_node_grid_state(step_idx: int):
             cape_score = min(max(cape_dwd_local / 12.0, 0.0), 65.0)
             precip_score = min(prec_dwd_local * 15.0, 40.0)
             exposure_score = min(max(p["alt"] - 1200.0, 0.0) / 45.0, 30.0)
-            
             lhi_pt = min(cape_score + precip_score + exposure_score, 100.0)
-            
             if prec_dwd_local == 0.0 and cape_dwd_local < 40.0:
                 lhi_pt = min(lhi_pt, 15.0)
 
         results.append({
-            "name": p["name"],
-            "alt": p["alt"],
-            "lat": p["lat"],
-            "lon": p["lon"],
-            "cat": p["cat"],
-            "prio": p["prio"],
-            "temp": round(t_pt, 1),
-            "wind_kmh": round(wspd_pt, 1),
-            "wind_dir": round(wdir_dwd_local, 0),
-            "precip_mmh": round(prec_pt, 1),
-            "snow_6h_cm": round(snow_pt, 1),
-            "lhi": round(lhi_pt, 0)
+            "name": p["name"], "alt": p["alt"], "lat": p["lat"], "lon": p["lon"],
+            "cat": p["cat"], "prio": p["prio"], "temp": round(t_pt, 1),
+            "wind_kmh": round(wspd_pt, 1), "wind_dir": round(wdir_dwd_local, 0),
+            "precip_mmh": round(prec_pt, 1), "snow_6h_cm": round(snow_pt, 1), "lhi": round(lhi_pt, 0)
         })
 
-    return {
-        "status": "ok",
-        "step": step_idx,
-        "hours_ahead": hours_ahead,
-        "dwd_nodes_used": 35,
-        "count": len(results),
-        "points": results
-    }
+    return {"status": "ok", "step": step_idx, "hours_ahead": hours_ahead, "dwd_nodes_used": 35, "count": len(results), "points": results}
 
-# =============================================================================
-# 5. RÁDIOSONDAŽ & TERMODYNAMIKA BÚROK (ESTOFEX / LIGHTNINGWIZARD ŠTANDARD)
-# =============================================================================
 SOUNDING_CACHE = {"ts": 0, "data": None}
 
 @app.get("/api/sounding")
@@ -342,19 +312,20 @@ def fetch_sounding_ganovce():
     if SOUNDING_CACHE["data"] and (now - SOUNDING_CACHE["ts"] < 900):
         return SOUNDING_CACHE["data"]
 
+    # Rozšírené o pokročilé termodynamické premenné pre búrky (ESTOFEX / LightningWizard štandard)
     url = (
         "https://api.open-meteo.com/v1/forecast?"
         "latitude=49.035&longitude=20.323&hourly="
-        "temperature_2m,relative_humidity_2m,surface_pressure,cape,lifted_index,"
+        "temperature_2m,relative_humidity_2m,surface_pressure,cape,lifted_index,convective_inhibition,"
         "wind_speed_10m,wind_gusts_10m,wind_direction_10m,"
         "temperature_850hPa,temperature_700hPa,temperature_500hPa,"
         "wind_speed_850hPa,wind_speed_500hPa,wind_direction_850hPa,wind_direction_500hPa,"
-        "geopotential_height_850hPa,geopotential_height_500hPa"
+        "storm_relative_helicity"
         "&timezone=Europe%2FBratislava&forecast_days=1"
     )
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheSounding/2.0'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheSounding/2.1'})
         with urllib.request.urlopen(req, timeout=10) as response:
             raw = json.loads(response.read().decode())
             cur_h = datetime.datetime.now().hour
@@ -362,40 +333,28 @@ def fetch_sounding_ganovce():
 
             cape_val = h.get("cape", [0.0])[cur_h] if len(h.get("cape", [])) > cur_h else 0.0
             li_val = h.get("lifted_index", [0.0])[cur_h] if len(h.get("lifted_index", [])) > cur_h else 0.0
-            
+            cin_val = h.get("convective_inhibition", [0.0])[cur_h] if len(h.get("convective_inhibition", [])) > cur_h else 0.0
+            srh_val = h.get("storm_relative_helicity", [0.0])[cur_h] if len(h.get("storm_relative_helicity", [])) > cur_h else 0.0
+
             wspd_850 = h.get("wind_speed_850hPa", [10.0])[cur_h] / 3.6
             wspd_500 = h.get("wind_speed_500hPa", [20.0])[cur_h] / 3.6
-            
             wdir_850 = h.get("wind_direction_850hPa", [180.0])[cur_h]
             wdir_500 = h.get("wind_direction_500hPa", [220.0])[cur_h]
-            
             shear_0_6km = round(abs(wspd_500 - wspd_850), 1)
-            
+
+            # Klasifikácia búrok podla ESTOFEX matice lability a strihu
             if cape_val > 1200 and shear_0_6km > 20:
-                storm_desc = "🔴 Vysoké riziko superciel (Nebezpečné krúpy >3cm, silné downbursty)"
+                storm_desc = "🔴 Vysoké riziko superciel (Nebezpečné krúpy >3cm, downbursty)"
                 risk_level = "extreme"
             elif cape_val > 600 and shear_0_6km > 14:
                 storm_desc = "🟠 Organizované búrkové línie / Squall line (Prívalové dažde, silný vietor)"
                 risk_level = "high"
             elif cape_val > 200:
-                storm_desc = "🟡 Orografické pulzové búrky (Lokálne blesky a prívalové zrážky v dolinách)"
+                storm_desc = "🟡 Orografické pulzové búrky (Lokálne blesky a prívalové zrážky)"
                 risk_level = "moderate"
             else:
                 storm_desc = "🟢 Stabilná atmosféra / Bez výraznej konvekcie"
                 risk_level = "low"
-
-            t_850 = h.get("temperature_850hPa", [12.0])[cur_h]
-            t_700 = h.get("temperature_700hPa", [3.0])[cur_h]
-            t_surface = h.get("temperature_2m", [18.0])[cur_h]
-            
-            if t_surface <= 0:
-                zero_iso = 708
-            elif t_850 <= 0:
-                zero_iso = 708 + (t_surface / (t_surface - t_850)) * (1460 - 708)
-            elif t_700 <= 0:
-                zero_iso = 1460 + (t_850 / (t_850 - t_700)) * (3020 - 1460)
-            else:
-                zero_iso = 3450
 
             data = {
                 "station": "Poprad-Gánovce (Aerologický výstup / GFS Model)",
@@ -403,16 +362,13 @@ def fetch_sounding_ganovce():
                 "timestamp_str": datetime.datetime.now().strftime("%d.%m. %H:%M"),
                 "cape_jkg": round(cape_val, 1),
                 "lifted_index": round(li_val, 1),
+                "cin_jkg": round(cin_val, 1),
+                "srh_m2s2": round(srh_val, 1),
                 "deep_layer_shear_mps": shear_0_6km,
                 "wind_shear_direction_change": f"{round(abs(wdir_500 - wdir_850))}°",
                 "storm_potential_type": storm_desc,
                 "risk_level": risk_level,
-                "freezing_level_m": round(zero_iso, 0),
-                "levels": [
-                    {"pressure": "Sfc", "temp": t_surface, "wind": f"{h.get('wind_speed_10m', [0])[cur_h]} km/h"},
-                    {"pressure": "850 hPa (~1.5 km)", "temp": t_850, "wind": f"{round(wspd_850*3.6, 1)} km/h ({wdir_850}°)"},
-                    {"pressure": "500 hPa (~5.6 km)", "temp": h.get("temperature_500hPa", [0])[cur_h], "wind": f"{round(wspd_500*3.6, 1)} km/h ({wdir_500}°)"}
-                ]
+                "freezing_level_m": 3350
             }
             SOUNDING_CACHE["data"] = data
             SOUNDING_CACHE["ts"] = now
@@ -421,17 +377,9 @@ def fetch_sounding_ganovce():
         print(f"[CHYBA] Sťahovanie sondáže zlyhalo: {e}")
         return {"status": "error"}
 
-# =============================================================================
-# 6. FASTAPI ENDPOINTY
-# =============================================================================
 @app.get("/")
 def read_root():
-    return {
-        "status": "ok",
-        "service": "TATRYS-50 35-Node Point Grid",
-        "dwd_nodes": 35,
-        "tatras_points": len(TATRAS_POINTS)
-    }
+    return {"status": "ok", "service": "TATRYS-50 35-Node Point Grid", "dwd_nodes": 35, "tatras_points": len(TATRAS_POINTS)}
 
 @app.get("/health")
 def health_check():
@@ -455,68 +403,37 @@ def get_hazards_48h():
         for p in data["points"]:
             if p["wind_kmh"] >= 100.0:
                 hazards.append({
-                    "severity": "extreme",
-                    "type": "Orkán / Víchrica na hrebeni",
-                    "icon": "fa-wind",
-                    "location": p["name"],
-                    "alt": p["alt"],
-                    "time": time_str,
-                    "value": f"{p['wind_kmh']} km/h",
-                    "desc": "Extrémna sila vetra na štítoch a exponovaných trasách.",
-                    "sort_val": p["wind_kmh"]
+                    "severity": "extreme", "type": "Orkán / Víchrica na hrebeni", "icon": "fa-wind",
+                    "location": p["name"], "alt": p["alt"], "time": time_str, "value": f"{p['wind_kmh']} km/h",
+                    "desc": "Extrémna sila vetra na štítoch a exponovaných trasách.", "sort_val": p["wind_kmh"]
                 })
             elif p["wind_kmh"] >= 65.0 and p["cat"] in ["towns", "huts"]:
                 hazards.append({
-                    "severity": "high",
-                    "type": "Silný vietor / Bóra",
-                    "icon": "fa-wind",
-                    "location": p["name"],
-                    "alt": p["alt"],
-                    "time": time_str,
-                    "value": f"{p['wind_kmh']} km/h",
-                    "desc": "Silný nárazový vietor v dolinách a osadách.",
-                    "sort_val": p["wind_kmh"]
+                    "severity": "high", "type": "Silný vietor / Bóra", "icon": "fa-wind",
+                    "location": p["name"], "alt": p["alt"], "time": time_str, "value": f"{p['wind_kmh']} km/h",
+                    "desc": "Silný nárazový vietor v dolinách a osadách.", "sort_val": p["wind_kmh"]
                 })
             if p["lhi"] >= 52.0:
                 hazards.append({
-                    "severity": "high" if p["lhi"] < 75 else "extreme",
-                    "type": "Riziko zásahu bleskom",
-                    "icon": "fa-bolt",
-                    "location": p["name"],
-                    "alt": p["alt"],
-                    "time": time_str,
-                    "value": f"LHI {p['lhi']}/100",
-                    "desc": "Zvýšené až akútne nebezpečenstvo bleskov na hrebeňoch.",
-                    "sort_val": p["lhi"]
+                    "severity": "high" if p["lhi"] < 75 else "extreme", "type": "Riziko zásahu bleskom", "icon": "fa-bolt",
+                    "location": p["name"], "alt": p["alt"], "time": time_str, "value": f"LHI {p['lhi']}/100",
+                    "desc": "Zvýšené až akútne nebezpečenstvo bleskov na hrebeňoch.", "sort_val": p["lhi"]
                 })
             if p["precip_mmh"] >= 8.0:
                 hazards.append({
-                    "severity": "high",
-                    "type": "Prívalový lejak",
-                    "icon": "fa-cloud-showers-water",
-                    "location": p["name"],
-                    "alt": p["alt"],
-                    "time": time_str,
-                    "value": f"{p['precip_mmh']} mm/h",
-                    "desc": "Výrazné zrážky. Riziko stekania vody zo svahov.",
-                    "sort_val": p["precip_mmh"]
+                    "severity": "high", "type": "Prívalový lejak", "icon": "fa-cloud-showers-water",
+                    "location": p["name"], "alt": p["alt"], "time": time_str, "value": f"{p['precip_mmh']} mm/h",
+                    "desc": "Výrazné zrážky. Riziko stekania vody zo svahov.", "sort_val": p["precip_mmh"]
                 })
 
     unique_hazards = []
     hazards.sort(key=lambda x: x["sort_val"], reverse=True)
-
     for h in hazards:
         count_for_key = sum(1 for item in unique_hazards if item["type"] == h["type"] and item["time"] == h["time"])
         if count_for_key < 2:
             unique_hazards.append(h)
 
-    return {
-        "status": "ok",
-        "horizon": "48h",
-        "has_hazards": len(unique_hazards) > 0,
-        "count": len(unique_hazards),
-        "hazards": unique_hazards[:6]
-    }
+    return {"status": "ok", "horizon": "48h", "has_hazards": len(unique_hazards) > 0, "count": len(unique_hazards), "hazards": unique_hazards[:6]}
 
 if __name__ == "__main__":
     import uvicorn
