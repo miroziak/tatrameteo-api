@@ -10,6 +10,57 @@ from wind_engine import calculate_unified_microclimate
 import requests
 from flask import jsonify
 
+@app.route('/api/forecast', methods=['GET'])
+def get_forecast():
+    lat = request.args.get('lat', default=49.1638, type=float)
+    lon = request.args.get('lon', default=20.1342, type=float)
+    
+    url = (
+        f"https://api.open-meteo.com/v1/dwd-icon?"
+        f"latitude={lat}&longitude={lon}"
+        f"&hourly=temperature_2m,relative_humidity_2m,precipitation,snowfall,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,direct_normal_irradiance,freezing_level_height"
+        f"&forecast_days=2&timezone=auto"
+    )
+    
+    res = requests.get(url, timeout=10)
+    if res.status_code != 200:
+        # Fallback na štandardný open-meteo model ak ICON model nemá pokrytie
+        url = (
+            f"https://api.open-meteo.com/v1/forecast?"
+            f"latitude={lat}&longitude={lon}"
+            f"&hourly=temperature_2m,relative_humidity_2m,precipitation,snowfall,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,direct_normal_irradiance,freezing_level_height"
+            f"&forecast_days=2&timezone=auto"
+        )
+        res = requests.get(url, timeout=10)
+        
+    data = res.json()
+    hourly = data["hourly"]
+    
+    timeline = []
+    for i in range(len(hourly["time"])):
+        timeline.append({
+            "time": hourly["time"][i],
+            "temp": hourly["temperature_2m"][i],
+            "freezing_level_m": hourly.get("freezing_level_height", [3000])[i],
+            "local_wind_ms": round(hourly["wind_speed_10m"][i] / 3.6, 1),
+            "gusts_ms": round(hourly["wind_gusts_10m"][i] / 3.6, 1),
+            "wind_dir_deg": hourly["wind_direction_10m"][i],
+            "slope_rad": hourly.get("direct_normal_irradiance", [0])[i],
+            "total_rad": hourly.get("direct_normal_irradiance", [0])[i],
+            "cloud_total": hourly["cloud_cover"][i],
+            "rain_mm": hourly["precipitation"][i],
+            "snow_cm": hourly.get("snowfall", [0])[i],
+            "wdi": 0.2,
+            "swe": 0.0
+        })
+        
+    return jsonify({
+        "lat": lat,
+        "lon": lon,
+        "elevation_m": int(data.get("elevation", 2000)),
+        "slope_deg": 32.0,
+        "timeline": timeline
+    })
 def init_sounding_table():
     """Automaticky vytvorí tabuľku pre rádiosondáž v PostgreSQL, ak ešte neexistuje."""
     try:
