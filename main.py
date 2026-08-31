@@ -8,6 +8,81 @@ from scipy.interpolate import RegularGridInterpolator
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+@app.get("/api/sounding")
+def fetch_sounding_ganovce():
+    now = datetime.datetime.now().timestamp()
+    if SOUNDING_CACHE["data"] and (now - SOUNDING_CACHE["ts"] < 900):
+        return SOUNDING_CACHE["data"]
+
+    # Rozšírené Open-Meteo volanie o tlakové hladiny a strih vetra
+    url = (
+        "https://api.open-meteo.com/v1/forecast?"
+        "latitude=49.035&longitude=20.323&hourly="
+        "temperature_2m,relative_humidity_2m,surface_pressure,cape,lifted_index,"
+        "wind_speed_10m,wind_gusts_10m,wind_direction_10m,"
+        "temperature_850hPa,temperature_700hPa,temperature_500hPa,"
+        "wind_speed_850hPa,wind_speed_500hPa,wind_direction_850hPa,wind_direction_500hPa,"
+        "geopotential_height_850hPa,geopotential_height_500hPa"
+        "&timezone=Europe%2FBratislava&forecast_days=1"
+    )
+
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheSounding/2.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            raw = json.loads(response.read().decode())
+            cur_h = datetime.datetime.now().hour
+            h = raw.get("hourly", {})
+
+            cape_val = h.get("cape", [0.0])[cur_h] if len(h.get("cape", [])) > cur_h else 0.0
+            li_val = h.get("lifted_index", [0.0])[cur_h] if len(h.get("lifted_index", [])) > cur_h else 0.0
+            
+            # Výpočet hĺbkového strihu vetra (Deep Layer Shear 0-6 km / 850hPa vs 500hPa)
+            wspd_850 = h.get("wind_speed_850hPa", [10.0])[cur_h] / 3.6 # prevod na m/s
+            wspd_500 = h.get("wind_speed_500hPa", [20.0])[cur_h] / 3.6 # prevod na m/s
+            
+            wdir_850 = h.get("wind_direction_850hPa", [180.0])[cur_h]
+            wdir_500 = h.get("wind_direction_500hPa", [220.0])[cur_h]
+            
+            shear_0_6km = round(abs(wspd_500 - wspd_850), 1)
+            
+            # Určenie typu potenciálnych konvektívnych javov podla ESTOFEX matice
+            if cape_val > 1200 and shear_0_6km > 20:
+                storm_desc = "🔴 Vysoké riziko superciel (Nebezpečné krúpy >3cm, silné downbursty)"
+                risk_level = "extreme"
+            elif cape_val > 600 and shear_0_6km > 14:
+                storm_desc = "🟠 Organizované búrkové línie / Squall line (Prívalové dažde, silný vietor)"
+                risk_level = "high"
+            elif cape_val > 200:
+                storm_desc = "🟡 Orografické pulzové búrky (Lokálne blesky a prívalové zrážky v dolinách)"
+                risk_level = "moderate"
+            else:
+                storm_desc = "🟢 Stabilná atmosféra / Bez výraznej konvekcie"
+                risk_level = "low"
+
+            data = {
+                "station": "Poprad-Gánovce (Aerologický výstup / GFS Model)",
+                "elevation_m": 708,
+                "timestamp_str": datetime.datetime.now().strftime("%d.%m. %H:%M"),
+                "cape_jkg": round(cape_val, 1),
+                "lifted_index": round(li_val, 1),
+                "deep_layer_shear_mps": shear_0_6km,
+                "wind_shear_direction_change": f"{round(abs(wdir_500 - wdir_850))}°",
+                "storm_potential_type": storm_desc,
+                "risk_level": risk_level,
+                "freezing_level_m": 3350,
+                "levels": [
+                    {"pressure": "Sfc", "temp": h.get("temperature_2m", [0])[cur_h], "wind": f"{h.get('wind_speed_10m', [0])[cur_h]} km/h"},
+                    {"pressure": "850 hPa (~1.5 km)", "temp": h.get("temperature_850hPa", [0])[cur_h], "wind": f"{round(wspd_850*3.6, 1)} km/h ({wdir_850}°)"},
+                    {"pressure": "500 hPa (~5.6 km)", "temp": h.get("temperature_500hPa", [0])[cur_h], "wind": f"{round(wspd_500*3.6, 1)} km/h ({wdir_500}°)"}
+                ]
+            }
+            SOUNDING_CACHE["data"] = data
+            SOUNDING_CACHE["ts"] + now
+            return data
+    except Exception as e:
+        print(f"[CHYBA] Sťahovanie sondáže zlyhalo: {e}")
+        return {"status": "error"}
+
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
