@@ -281,6 +281,15 @@ def get_stations():
             "precipitation": r[8]
         })
     return jsonify({"stations": stations})
+from wind_engine import calculate_wind_field
+
+@app.route('/api/wind-field', methods=['GET'])
+def get_wind_field():
+    try:
+        data = calculate_wind_field()
+        return jsonify({"vectors": data})
+    except Exception as e:
+        return jsonify({"error": str(e), "vectors": []}), 500
 @app.post("/api/analyze-gpx")
 async def analyze_gpx(file: UploadFile = File(...)):
     try:
