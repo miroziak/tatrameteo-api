@@ -445,7 +445,6 @@ def get_hazards_48h():
         time_str = target_time.strftime("%d.%m. %H:%M") + f" (+{data['hours_ahead']}h)"
 
         for p in data["points"]:
-            # 1. Silný vietor / Bóra (znížený limit z 80 na 65 km/h)
             if p["wind_kmh"] >= 100.0:
                 hazards.append({
                     "severity": "extreme",
@@ -455,56 +454,69 @@ def get_hazards_48h():
                     "alt": p["alt"],
                     "time": time_str,
                     "value": f"{p['wind_kmh']} km/h",
-                    "desc": "Extrémna sila vetra na štítoch a exponowanych trasách."
+                    "desc": "Extrémna sila vetra na štítoch a exponovaných trasách.",
+                    "sort_val": p["wind_kmh"]
                 })
             elif p["wind_kmh"] >= 65.0 and p["cat"] in ["towns", "huts"]:
                 hazards.append({
                     "severity": "high",
-                    "type": "Tatranská Bóra / Silný vietor",
+                    "type": "Silný vietor / Bóra",
                     "icon": "fa-wind",
                     "location": p["name"],
                     "alt": p["alt"],
                     "time": time_str,
                     "value": f"{p['wind_kmh']} km/h",
-                    "desc": "Silný nárazový vietor v dolinách a osadách."
+                    "desc": "Silný nárazový vietor v dolinách a osadách.",
+                    "sort_val": p["wind_kmh"]
                 })
-                
-            # 2. Riziko bleskov (znížený limit LHI z 65 na 45)
-            if p["lhi"] >= 45.0:
+            # Zvýšený prah na LHI >= 52, aby sa nezobrazovali stovky malých bodov
+            if p["lhi"] >= 52.0:
                 hazards.append({
-                    "severity": "high" if p["lhi"] < 70 else "extreme",
+                    "severity": "high" if p["lhi"] < 75 else "extreme",
                     "type": "Riziko zásahu bleskom",
                     "icon": "fa-bolt",
                     "location": p["name"],
                     "alt": p["alt"],
                     "time": time_str,
                     "value": f"LHI {p['lhi']}/100",
-                    "desc": "Zvýšené až akútne nebezpečenstvo bleskov na hrebeňoch."
+                    "desc": "Zvýšené až akútne nebezpečenstvo bleskov na hrebeňoch.",
+                    "sort_val": p["lhi"]
                 })
-                
-            # 3. Prívalový lejak (znížený limit z 12 na 6 mm/h)
-            if p["precip_mmh"] >= 6.0:
+            if p["precip_mmh"] >= 8.0:
                 hazards.append({
                     "severity": "high",
-                    "type": "Intenzívny dážď / Lejak",
+                    "type": "Prívalový lejak",
                     "icon": "fa-cloud-showers-water",
                     "location": p["name"],
                     "alt": p["alt"],
                     "time": time_str,
                     "value": f"{p['precip_mmh']} mm/h",
-                    "desc": "Výraznejšie zrážky. Riziko stekania vody zo svahov."
+                    "desc": "Výrazné zrážky. Riziko stekania vody zo svahov.",
+                    "sort_val": p["precip_mmh"]
                 })
-            if p["snow_6h_cm"] >= 15.0:
-                hazards.append({
-                    "severity": "high",
-                    "type": "Intenzívne sneženie & Záveje",
-                    "icon": "fa-snowflake",
-                    "location": p["name"],
-                    "alt": p["alt"],
-                    "time": time_str,
-                    "value": f"+{p['snow_6h_cm']} cm / 6h",
-                    "desc": "Rýchly prírastok snehu a nafúkané snehové dosky v žľaboch."
-                })
+
+    # Deduplikacija a obmedzenie na max 6 najzávažnejších výstrah v danom čase
+    unique_hazards = []
+    seen = set()
+    
+    # Sortujeme zostupne podľa závažnosti (sort_val)
+    hazards.sort(key=lambda x: x["sort_val"], reverse=True)
+
+    for h in hazards:
+        key = (h["type"], h["time"]) # Zoskupíme rovnaký typ výstrahy v rovnakom čase
+        # Ak už máme pre daný čas a typ výstrahy 2 lokality, ďalšie preskočíme a zhrnieme
+        count_for_key = sum(1 for item in unique_hazards if item["type"] == h["type"] and item["time"] == h["time"])
+        
+        if count_for_key < 2:
+            unique_hazards.append(h)
+
+    return {
+        "status": "ok",
+        "horizon": "48h",
+        "has_hazards": len(unique_hazards) > 0,
+        "count": len(unique_hazards),
+        "hazards": unique_hazards[:6]  # Zobrazíme max 6 najdôležitejších kariet
+    }
 
     unique_hazards = []
     seen = set()
