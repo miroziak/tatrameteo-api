@@ -1,128 +1,16 @@
-import io
 import os
 import json
 import datetime
 import urllib.request
 import numpy as np
-import scipy.ndimage as ndimage
-from scipy.interpolate import RegularGridInterpolator
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
-from fastapi import FastAPI, Response, Query
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-@app.get("/api/hazards")
-def get_hazards_24h():
-    """Analyzuje extrémne prejavy počasia na najbližších 24 hodín (kroky 0 až 4)."""
-    hazards = []
-    base_dt = datetime.datetime.now()
-
-    # Prechádzame 24-hodinový horizont (kroky 0, 1, 2, 3, 4)
-    for step in range(5):
-        d = run_35_node_downscaled_step(step)
-        step_hours = step * 6
-        target_time = base_dt + datetime.timedelta(hours=step_hours)
-        time_str = target_time.strftime("%d.%m. %H:%M") + f" (+{step_hours}h)"
-
-        for p in TATRAS_CORE_POINTS:
-            px_m, py_m = p["x"] * 1000.0, p["y"] * 1000.0
-            ix = int(np.clip(px_m / DX, 0, DEM_100.shape[0] - 1))
-            iy = int(np.clip(py_m / DY, 0, DEM_100.shape[1] - 1))
-
-            spd = float(d['wind_spd'][ix, iy] * 3.6)
-            prec = float(d['p_final'][ix, iy])
-            sn = float(d['snow_diff'][ix, iy])
-            lh = float(d['lhi'][ix, iy])
-
-            # 1. Extrémny vietor a Bóra
-            if spd >= 105.0:
-                hazards.append({
-                    "severity": "extreme",
-                    "type": "Orkán / Extrémna víchrica",
-                    "icon": "fa-wind",
-                    "location": p["name"],
-                    "alt": p["alt"],
-                    "time": time_str,
-                    "value": f"{spd:.0f} km/h",
-                    "desc": "Kritická sila vetra na hrebeni. Zákaz pohybu na exponovaných trasách."
-                })
-            elif spd >= 80.0 and p["type"] in ["town", "hut"]:
-                hazards.append({
-                    "severity": "high",
-                    "type": "Tatranská Bóra / Silný vietor",
-                    "icon": "fa-wind",
-                    "location": p["name"],
-                    "alt": p["alt"],
-                    "time": time_str,
-                    "value": f"{spd:.0f} km/h",
-                    "desc": "Padavý nárazový vietor v lesnom pásme a dolinách. Riziko vývratov."
-                })
-
-            # 2. Riziko bleskov (LHI)
-            if lh >= 65.0:
-                hazards.append({
-                    "severity": "extreme",
-                    "type": "Akútne nebezpečenstvo bleskov",
-                    "icon": "fa-bolt",
-                    "location": p["name"],
-                    "alt": p["alt"],
-                    "time": time_str,
-                    "value": f"LHI {lh:.0f}/100",
-                    "desc": "Vysoká konvektívna nestabilita na hrebeni. Zostúpte do dolín."
-                })
-
-            # 3. Prívalové zrážky
-            if prec >= 12.0:
-                hazards.append({
-                    "severity": "high",
-                    "type": "Prívalový dážď",
-                    "icon": "fa-cloud-showers-water",
-                    "location": p["name"],
-                    "alt": p["alt"],
-                    "time": time_str,
-                    "value": f"{prec:.1f} mm/h",
-                    "desc": "Intenzívne zrážky. Riziko rozvodnenia horských potokov a strhnutia chodníkov."
-                })
-
-            # 4. Intenzívne snehové záveje
-            if sn >= 15.0:
-                hazards.append({
-                    "severity": "high",
-                    "type": "Snehová kalamita & Záveje",
-                    "icon": "fa-snowflake",
-                    "location": p["name"],
-                    "alt": p["alt"],
-                    "time": time_str,
-                    "value": f"+{sn:.0f} cm / 6h",
-                    "desc": "Masívne ukladanie naviateho snehu v žľaboch. Zvýšené lavínové riziko."
-                })
-
-    # Zoradenie: najprv extrémne, potom vysoké riziká
-    hazards.sort(key=lambda x: (0 if x["severity"] == "extreme" else 1))
-    
-    # Odstránenie duplicitných záznamov pre rovnaké miesto a čas
-    unique_hazards = []
-    seen = set()
-    for h in hazards:
-        key = (h["type"], h["location"], h["time"])
-        if key not in seen:
-            seen.add(key)
-            unique_hazards.append(h)
-
-    return {
-        "status": "ok",
-        "horizon": "24h",
-        "has_hazards": len(unique_hazards) > 0,
-        "count": len(unique_hazards),
-        "hazards": unique_hazards[:12]  # Vráti max 12 najdôležitejších udalostí
-    }
-
 app = FastAPI(
-    title="TATRYS-50 v2 35-Node DWD ICON API | Avalanche.sk",
-    description="Priestorový multi-grid numerický downscaling z 35 referenčných uzlov DWD ICON na 100m DEM Tatier.",
-    version="3.5.1"
+    title="TATRYS-50 Point-Grid Engine | Avalanche.sk",
+    description="Ultra-rýchly vektorový orografický model pre 200+ bodov Tatier napojený na DWD ICON.",
+    version="4.0.0"
 )
 
 app.add_middleware(
@@ -141,493 +29,330 @@ app.add_middleware(
 )
 
 # =============================================================================
-# 1. 200+ POMENOVANÝCH BODOV VYSOKÝCH TATIER (Územie 16 x 12 km)
+# DATABÁZA 200+ REÁLNYCH BODOV VYSOKÝCH A BELIANSKYCH TATIER
 # =============================================================================
-TATRAS_CORE_POINTS = [
-    # Štíty
-    {"name": "Gerlachovský štít", "alt": 2655, "x": 8.0, "y": 6.2, "type": "peak", "prio": 1},
-    {"name": "Lomnický štít", "alt": 2634, "x": 12.0, "y": 6.8, "type": "peak", "prio": 1},
-    {"name": "Ľadový štít", "alt": 2627, "x": 11.0, "y": 8.0, "type": "peak", "prio": 1},
-    {"name": "Pyšný štít", "alt": 2623, "x": 11.7, "y": 7.5, "type": "peak", "prio": 1},
-    {"name": "Zadný Gerlach", "alt": 2616, "x": 7.8, "y": 6.5, "type": "peak", "prio": 2},
-    {"name": "Lavínový štít", "alt": 2606, "x": 7.9, "y": 6.8, "type": "peak", "prio": 2},
-    {"name": "Kotlový štít", "alt": 2601, "x": 8.1, "y": 5.6, "type": "peak", "prio": 2},
-    {"name": "Malý Ľadový štít", "alt": 2602, "x": 10.7, "y": 7.8, "type": "peak", "prio": 2},
-    {"name": "Vysoká", "alt": 2560, "x": 6.3, "y": 5.8, "type": "peak", "prio": 1},
-    {"name": "Kežmarský štít", "alt": 2556, "x": 12.5, "y": 6.5, "type": "peak", "prio": 1},
-    {"name": "Končistá", "alt": 2538, "x": 7.0, "y": 4.8, "type": "peak", "prio": 1},
-    {"name": "Baranie rohy", "alt": 2526, "x": 11.3, "y": 8.2, "type": "peak", "prio": 1},
-    {"name": "Malý Kežmarský štít", "alt": 2514, "x": 12.4, "y": 7.2, "type": "peak", "prio": 2},
-    {"name": "Rysy", "alt": 2501, "x": 5.7, "y": 6.0, "type": "peak", "prio": 1},
-    {"name": "Ťažký štít", "alt": 2500, "x": 6.1, "y": 6.1, "type": "peak", "prio": 2},
-    {"name": "Kriváň", "alt": 2495, "x": 2.7, "y": 5.0, "type": "peak", "prio": 1},
-    {"name": "Bradavica", "alt": 2476, "x": 8.8, "y": 6.2, "type": "peak", "prio": 1},
-    {"name": "Gánok", "alt": 2462, "x": 6.7, "y": 6.2, "type": "peak", "prio": 2},
-    {"name": "Slavkovský štít", "alt": 2452, "x": 9.7, "y": 4.0, "type": "peak", "prio": 1},
-    {"name": "Batizovský štít", "alt": 2448, "x": 7.3, "y": 5.5, "type": "peak", "prio": 2},
-    {"name": "Prostredný hrot", "alt": 2441, "x": 10.3, "y": 5.8, "type": "peak", "prio": 1},
-    {"name": "Mengusovský štít", "alt": 2438, "x": 5.5, "y": 6.8, "type": "peak", "prio": 1},
-    {"name": "Hrubý vrch", "alt": 2428, "x": 3.7, "y": 6.5, "type": "peak", "prio": 2},
-    {"name": "Východná Vysoká", "alt": 2428, "x": 7.7, "y": 7.2, "type": "peak", "prio": 1},
-    {"name": "Čierny štít", "alt": 2429, "x": 11.9, "y": 8.5, "type": "peak", "prio": 2},
-    {"name": "Zlobivá", "alt": 2426, "x": 7.0, "y": 6.2, "type": "peak", "prio": 2},
-    {"name": "Satan", "alt": 2421, "x": 4.1, "y": 5.2, "type": "peak", "prio": 1},
-    {"name": "Kolový štít", "alt": 2418, "x": 12.1, "y": 9.0, "type": "peak", "prio": 2},
-    {"name": "Javorový štít", "alt": 2418, "x": 10.0, "y": 8.5, "type": "peak", "prio": 2},
-    {"name": "Veľké Solisko", "alt": 2412, "x": 4.0, "y": 4.5, "type": "peak", "prio": 2},
-    {"name": "Furkotský štít", "alt": 2405, "x": 3.9, "y": 6.2, "type": "peak", "prio": 2},
-    {"name": "Kačací štít", "alt": 2401, "x": 7.1, "y": 6.6, "type": "peak", "prio": 3},
-    {"name": "Svišťový štít", "alt": 2382, "x": 8.5, "y": 7.8, "type": "peak", "prio": 2},
-    {"name": "Štrbský štít", "alt": 2381, "x": 4.5, "y": 6.0, "type": "peak", "prio": 2},
-    {"name": "Kôprovský štít", "alt": 2363, "x": 4.5, "y": 6.5, "type": "peak", "prio": 1},
-    {"name": "Huncovský štít", "alt": 2352, "x": 13.0, "y": 6.0, "type": "peak", "prio": 2},
-    {"name": "Ostrá", "alt": 2350, "x": 3.5, "y": 5.2, "type": "peak", "prio": 2},
-    {"name": "Ostrva", "alt": 1984, "x": 5.9, "y": 3.2, "type": "peak", "prio": 2},
-    {"name": "Tupá", "alt": 2284, "x": 6.5, "y": 4.2, "type": "peak", "prio": 2},
-    {"name": "Patria", "alt": 2203, "x": 4.7, "y": 2.5, "type": "peak", "prio": 2},
-    {"name": "Predné Solisko", "alt": 2117, "x": 4.3, "y": 3.0, "type": "peak", "prio": 1},
-    {"name": "Jahňací štít", "alt": 2230, "x": 13.3, "y": 9.5, "type": "peak", "prio": 1},
-    {"name": "Kozí štít", "alt": 2111, "x": 12.8, "y": 8.6, "type": "peak", "prio": 2},
-    {"name": "Jastrabia veža", "alt": 2137, "x": 13.0, "y": 8.8, "type": "peak", "prio": 2},
-    {"name": "Veľká Svišťovka", "alt": 2038, "x": 12.8, "y": 7.2, "type": "peak", "prio": 2},
-    {"name": "Havran", "alt": 2152, "x": 12.7, "y": 10.8, "type": "peak", "prio": 1},
-    {"name": "Ždiarska vidla", "alt": 2142, "x": 13.3, "y": 10.5, "type": "peak", "prio": 1},
-    {"name": "Hlúpy", "alt": 2061, "x": 14.0, "y": 9.8, "type": "peak", "prio": 2},
-    {"name": "Muráň", "alt": 1890, "x": 11.3, "y": 11.5, "type": "peak", "prio": 2},
+TATRAS_POINTS = [
+    # --- ŠTÍTY A VEŽE ---
+    {"name": "Gerlachovský štít", "alt": 2655, "lat": 49.1639, "lon": 20.1342, "cat": "peaks", "prio": 1},
+    {"name": "Lomnický štít", "alt": 2634, "lat": 49.1953, "lon": 20.2131, "cat": "peaks", "prio": 1},
+    {"name": "Ľadový štít", "alt": 2627, "lat": 49.1972, "lon": 20.1833, "cat": "peaks", "prio": 1},
+    {"name": "Pyšný štít", "alt": 2623, "lat": 49.1961, "lon": 20.2014, "cat": "peaks", "prio": 1},
+    {"name": "Zadný Gerlach", "alt": 2616, "lat": 49.1681, "lon": 20.1308, "cat": "peaks", "prio": 2},
+    {"name": "Lavínový štít", "alt": 2606, "lat": 49.1694, "lon": 20.1319, "cat": "peaks", "prio": 2},
+    {"name": "Kotlový štít", "alt": 2601, "lat": 49.1583, "lon": 20.1361, "cat": "peaks", "prio": 2},
+    {"name": "Malý Ľadový štít", "alt": 2602, "lat": 49.1944, "lon": 20.1778, "cat": "peaks", "prio": 2},
+    {"name": "Vysoká", "alt": 2560, "lat": 49.1722, "lon": 20.0903, "cat": "peaks", "prio": 1},
+    {"name": "Kežmarský štít", "alt": 2556, "lat": 49.1986, "lon": 20.2222, "cat": "peaks", "prio": 1},
+    {"name": "Končistá", "alt": 2538, "lat": 49.1578, "lon": 20.1139, "cat": "peaks", "prio": 1},
+    {"name": "Baranie rohy", "alt": 2526, "lat": 49.1989, "lon": 20.1944, "cat": "peaks", "prio": 1},
+    {"name": "Malý Kežmarský štít", "alt": 2514, "lat": 49.2008, "lon": 20.2186, "cat": "peaks", "prio": 2},
+    {"name": "Rysy", "alt": 2501, "lat": 49.1794, "lon": 20.0881, "cat": "peaks", "prio": 1},
+    {"name": "Ťažký štít", "alt": 2500, "lat": 49.1736, "lon": 20.0861, "cat": "peaks", "prio": 2},
+    {"name": "Kriváň", "alt": 2495, "lat": 49.1575, "lon": 20.0000, "cat": "peaks", "prio": 1},
+    {"name": "Bradavica", "alt": 2476, "lat": 49.1722, "lon": 20.1556, "cat": "peaks", "prio": 1},
+    {"name": "Gánok", "alt": 2462, "lat": 49.1764, "lon": 20.1014, "cat": "peaks", "prio": 2},
+    {"name": "Slavkovský štít", "alt": 2452, "lat": 49.1656, "lon": 20.1839, "cat": "peaks", "prio": 1},
+    {"name": "Batizovský štít", "alt": 2448, "lat": 49.1667, "lon": 20.1222, "cat": "peaks", "prio": 2},
+    {"name": "Prostredný hrot", "alt": 2441, "lat": 49.1847, "lon": 20.1917, "cat": "peaks", "prio": 1},
+    {"name": "Mengusovský štít", "alt": 2438, "lat": 49.1833, "lon": 20.0611, "cat": "peaks", "prio": 1},
+    {"name": "Hrubý vrch", "alt": 2428, "lat": 49.1750, "lon": 20.0278, "cat": "peaks", "prio": 2},
+    {"name": "Východná Vysoká", "alt": 2428, "lat": 49.1750, "lon": 20.1444, "cat": "peaks", "prio": 1},
+    {"name": "Čierny štít", "alt": 2429, "lat": 49.2042, "lon": 20.2083, "cat": "peaks", "prio": 2},
+    {"name": "Zlobivá", "alt": 2426, "lat": 49.1708, "lon": 20.1056, "cat": "peaks", "prio": 2},
+    {"name": "Satan", "alt": 2421, "lat": 49.1639, "lon": 20.0528, "cat": "peaks", "prio": 1},
+    {"name": "Kolový štít", "alt": 2418, "lat": 49.2083, "lon": 20.2028, "cat": "peaks", "prio": 2},
+    {"name": "Javorový štít", "alt": 2418, "lat": 49.1917, "lon": 20.1611, "cat": "peaks", "prio": 2},
+    {"name": "Veľké Solisko", "alt": 2412, "lat": 49.1556, "lon": 20.0417, "cat": "peaks", "prio": 2},
+    {"name": "Furkotský štít", "alt": 2405, "lat": 49.1722, "lon": 20.0333, "cat": "peaks", "prio": 2},
+    {"name": "Kačací štít", "alt": 2401, "lat": 49.1681, "lon": 20.1111, "cat": "peaks", "prio": 3},
+    {"name": "Svišťový štít", "alt": 2382, "lat": 49.1792, "lon": 20.1556, "cat": "peaks", "prio": 2},
+    {"name": "Štrbský štít", "alt": 2381, "lat": 49.1778, "lon": 20.0472, "cat": "peaks", "prio": 2},
+    {"name": "Kôprovský štít", "alt": 2363, "lat": 49.1797, "lon": 20.0519, "cat": "peaks", "prio": 1},
+    {"name": "Huncovský štít", "alt": 2352, "lat": 49.1917, "lon": 20.2278, "cat": "peaks", "prio": 2},
+    {"name": "Ostrá", "alt": 2350, "lat": 49.1611, "lon": 20.0278, "cat": "peaks", "prio": 2},
+    {"name": "Ostrva", "alt": 1984, "lat": 49.1486, "lon": 20.0889, "cat": "peaks", "prio": 2},
+    {"name": "Tupá", "alt": 2284, "lat": 49.1528, "lon": 20.1028, "cat": "peaks", "prio": 2},
+    {"name": "Patria", "alt": 2203, "lat": 49.1417, "lon": 20.0611, "cat": "peaks", "prio": 2},
+    {"name": "Predné Solisko", "alt": 2117, "lat": 49.1444, "lon": 20.0417, "cat": "peaks", "prio": 1},
+    {"name": "Jahňací štít", "alt": 2230, "lat": 49.2194, "lon": 20.2222, "cat": "peaks", "prio": 1},
+    {"name": "Kozí štít", "alt": 2111, "lat": 49.2139, "lon": 20.2167, "cat": "peaks", "prio": 2},
+    {"name": "Jastrabia veža", "alt": 2137, "lat": 49.2111, "lon": 20.2194, "cat": "peaks", "prio": 2},
+    {"name": "Veľká Svišťovka", "alt": 2038, "lat": 49.2028, "lon": 20.2333, "cat": "peaks", "prio": 2},
+    {"name": "Havran", "alt": 2152, "lat": 49.2472, "lon": 20.2000, "cat": "peaks", "prio": 1},
+    {"name": "Ždiarska vidla", "alt": 2142, "lat": 49.2444, "lon": 20.2167, "cat": "peaks", "prio": 1},
+    {"name": "Hlúpy", "alt": 2061, "lat": 49.2361, "lon": 20.2306, "cat": "peaks", "prio": 2},
+    {"name": "Muráň", "alt": 1890, "lat": 49.2500, "lon": 20.1694, "cat": "peaks", "prio": 2},
 
-    # Sedlá
-    {"name": "Poľský hrebeň", "alt": 2200, "x": 7.9, "y": 6.8, "type": "pass", "prio": 1},
-    {"name": "Prielom", "alt": 2290, "x": 8.4, "y": 7.2, "type": "pass", "prio": 1},
-    {"name": "Sedielko", "alt": 2376, "x": 10.5, "y": 7.8, "type": "pass", "prio": 1},
-    {"name": "Priečne sedlo", "alt": 2352, "x": 10.1, "y": 7.0, "type": "pass", "prio": 1},
-    {"name": "Baranie sedlo", "alt": 2384, "x": 11.5, "y": 8.0, "type": "pass", "prio": 2},
-    {"name": "Váha", "alt": 2340, "x": 5.8, "y": 5.8, "type": "pass", "prio": 1},
-    {"name": "Vyšné Kôprovské sedlo", "alt": 2180, "x": 4.7, "y": 6.2, "type": "pass", "prio": 1},
-    {"name": "Kopské sedlo", "alt": 1750, "x": 13.7, "y": 9.8, "type": "pass", "prio": 1},
-    {"name": "Sedlo pod Ostrvou", "alt": 1960, "x": 6.0, "y": 3.0, "type": "pass", "prio": 1},
-    {"name": "Bystrá lávka", "alt": 2300, "x": 3.7, "y": 5.8, "type": "pass", "prio": 1},
-    {"name": "Lomnické sedlo", "alt": 2190, "x": 12.1, "y": 6.0, "type": "pass", "prio": 1},
+    # --- SEDLÁ A PRIECHODY ---
+    {"name": "Poľský hrebeň", "alt": 2200, "lat": 49.1722, "lon": 20.1417, "cat": "passes", "prio": 1},
+    {"name": "Prielom", "alt": 2290, "lat": 49.1750, "lon": 20.1500, "cat": "passes", "prio": 1},
+    {"name": "Sedielko", "alt": 2376, "lat": 49.1917, "lon": 20.1778, "cat": "passes", "prio": 1},
+    {"name": "Priečne sedlo", "alt": 2352, "lat": 49.1889, "lon": 20.1833, "cat": "passes", "prio": 1},
+    {"name": "Baranie sedlo", "alt": 2384, "lat": 49.2014, "lon": 20.2000, "cat": "passes", "prio": 2},
+    {"name": "Váha", "alt": 2340, "lat": 49.1778, "lon": 20.0833, "cat": "passes", "prio": 1},
+    {"name": "Vyšné Kôprovské sedlo", "alt": 2180, "lat": 49.1750, "lon": 20.0556, "cat": "passes", "prio": 1},
+    {"name": "Kopské sedlo", "alt": 1750, "lat": 49.2278, "lon": 20.2278, "cat": "passes", "prio": 1},
+    {"name": "Sedlo pod Ostrvou", "alt": 1960, "lat": 49.1472, "lon": 20.0861, "cat": "passes", "prio": 1},
+    {"name": "Bystrá lávka", "alt": 2300, "lat": 49.1667, "lon": 20.0389, "cat": "passes", "prio": 1},
+    {"name": "Lomnické sedlo", "alt": 2190, "lat": 49.1903, "lon": 20.2167, "cat": "passes", "prio": 1},
+    {"name": "Sedlo pod Svišťovkou", "alt": 2023, "lat": 49.2000, "lon": 20.2306, "cat": "passes", "prio": 1},
+    {"name": "Široké sedlo (Belianske)", "alt": 1825, "lat": 49.2389, "lon": 20.2250, "cat": "passes", "prio": 1},
 
-    # Plesá
-    {"name": "Veľké Hincovo pleso", "alt": 1945, "x": 5.0, "y": 5.8, "type": "lake", "prio": 1},
-    {"name": "Štrbské pleso", "alt": 1346, "x": 3.9, "y": 1.5, "type": "lake", "prio": 1},
-    {"name": "Popradské pleso", "alt": 1494, "x": 4.8, "y": 2.2, "type": "lake", "prio": 1},
-    {"name": "Batizovské pleso", "alt": 1884, "x": 7.3, "y": 4.5, "type": "lake", "prio": 1},
-    {"name": "Velické pleso", "alt": 1670, "x": 8.3, "y": 3.5, "type": "lake", "prio": 1},
-    {"name": "Skalnaté pleso", "alt": 1751, "x": 12.1, "y": 5.0, "type": "lake", "prio": 1},
-    {"name": "Zelené pleso Kežmarské", "alt": 1551, "x": 12.8, "y": 8.0, "type": "lake", "prio": 1},
-    {"name": "Veľké Spišské pleso", "alt": 2014, "x": 10.7, "y": 7.0, "type": "lake", "prio": 1},
-    {"name": "Žabie plesá Mengusovské", "alt": 1919, "x": 5.5, "y": 5.2, "type": "lake", "prio": 1},
-    {"name": "Capie pleso", "alt": 2075, "x": 4.1, "y": 5.5, "type": "lake", "prio": 1},
+    # --- PLESÁ ---
+    {"name": "Veľké Hincovo pleso", "alt": 1945, "lat": 49.1764, "lon": 20.0600, "cat": "lakes", "prio": 1},
+    {"name": "Štrbské pleso", "alt": 1346, "lat": 49.1194, "lon": 20.0603, "cat": "lakes", "prio": 1},
+    {"name": "Popradské pleso", "alt": 1494, "lat": 49.1536, "lon": 20.0797, "cat": "lakes", "prio": 1},
+    {"name": "Batizovské pleso", "alt": 1884, "lat": 49.1597, "lon": 20.1306, "cat": "lakes", "prio": 1},
+    {"name": "Velické pleso", "alt": 1670, "lat": 49.1583, "lon": 20.1556, "cat": "lakes", "prio": 1},
+    {"name": "Skalnaté pleso", "alt": 1751, "lat": 49.1892, "lon": 20.2319, "cat": "lakes", "prio": 1},
+    {"name": "Zelené pleso Kežmarské", "alt": 1551, "lat": 49.2100, "lon": 20.2214, "cat": "lakes", "prio": 1},
+    {"name": "Veľké Spišské pleso", "alt": 2014, "lat": 49.1903, "lon": 20.1986, "cat": "lakes", "prio": 1},
+    {"name": "Žabie plesá Mengusovské", "alt": 1919, "lat": 49.1722, "lon": 20.0806, "cat": "lakes", "prio": 1},
+    {"name": "Capie pleso", "alt": 2075, "lat": 49.1681, "lon": 20.0486, "cat": "lakes", "prio": 1},
+    {"name": "Nižné Wahlenbergovo pleso", "alt": 2058, "lat": 49.1625, "lon": 20.0361, "cat": "lakes", "prio": 2},
+    {"name": "Vyšné Wahlenbergovo pleso", "alt": 2157, "lat": 49.1681, "lon": 20.0347, "cat": "lakes", "prio": 2},
+    {"name": "Zbojnícke plesá", "alt": 1960, "lat": 49.1778, "lon": 20.1694, "cat": "lakes", "prio": 2},
 
-    # Chaty
-    {"name": "Chata pod Rysmi", "alt": 2250, "x": 5.7, "y": 5.9, "type": "hut", "prio": 1},
-    {"name": "Téryho chata", "alt": 2015, "x": 10.8, "y": 6.8, "type": "hut", "prio": 1},
-    {"name": "Zbojnícka chata", "alt": 1960, "x": 9.2, "y": 5.8, "type": "hut", "prio": 1},
-    {"name": "Chata pod Soliskom", "alt": 1840, "x": 4.3, "y": 2.2, "type": "hut", "prio": 1},
-    {"name": "Skalnatá chata", "alt": 1751, "x": 12.1, "y": 5.0, "type": "hut", "prio": 1},
-    {"name": "Sliezsky dom", "alt": 1670, "x": 8.3, "y": 3.6, "type": "hut", "prio": 1},
-    {"name": "Chata pri Zelenom plese", "alt": 1551, "x": 12.8, "y": 8.0, "type": "hut", "prio": 1},
-    {"name": "Horský hotel Popradské pleso", "alt": 1494, "x": 4.8, "y": 2.2, "type": "hut", "prio": 1},
-    {"name": "Bilíkova chata", "alt": 1255, "x": 10.1, "y": 1.5, "type": "hut", "prio": 1},
-    {"name": "Rainerova chata", "alt": 1301, "x": 10.3, "y": 2.0, "type": "hut", "prio": 1},
-    {"name": "Zamkovského chata", "alt": 1475, "x": 11.0, "y": 3.5, "type": "hut", "prio": 1},
+    # --- HORSKÉ CHATY ---
+    {"name": "Chata pod Rysmi", "alt": 2250, "lat": 49.1778, "lon": 20.0861, "cat": "huts", "prio": 1},
+    {"name": "Téryho chata", "alt": 2015, "lat": 49.1908, "lon": 20.2003, "cat": "huts", "prio": 1},
+    {"name": "Zbojnícka chata", "alt": 1960, "lat": 49.1764, "lon": 20.1667, "cat": "huts", "prio": 1},
+    {"name": "Chata pod Soliskom", "alt": 1840, "lat": 49.1417, "lon": 20.0417, "cat": "huts", "prio": 1},
+    {"name": "Skalnatá chata", "alt": 1751, "lat": 49.1889, "lon": 20.2319, "cat": "huts", "prio": 1},
+    {"name": "Sliezsky dom", "alt": 1670, "lat": 49.1569, "lon": 20.1569, "cat": "huts", "prio": 1},
+    {"name": "Chata pri Zelenom plese", "alt": 1551, "lat": 49.2103, "lon": 20.2214, "cat": "huts", "prio": 1},
+    {"name": "Horský hotel Popradské pleso", "alt": 1494, "lat": 49.1536, "lon": 20.0797, "cat": "huts", "prio": 1},
+    {"name": "Bilíkova chata", "alt": 1255, "lat": 49.1583, "lon": 20.2208, "cat": "huts", "prio": 1},
+    {"name": "Rainerova chata", "alt": 1301, "lat": 49.1653, "lon": 20.2194, "cat": "huts", "prio": 1},
+    {"name": "Zamkovského chata", "alt": 1475, "lat": 49.1736, "lon": 20.2250, "cat": "huts", "prio": 1},
+    {"name": "Chata Plesnivec", "alt": 1290, "lat": 49.2278, "lon": 20.2722, "cat": "huts", "prio": 1},
 
-    # Osady
-    {"name": "Starý Smokovec", "alt": 1010, "x": 9.5, "y": 0.5, "type": "town", "prio": 1},
-    {"name": "Tatranská Lomnica", "alt": 850, "x": 13.0, "y": 1.0, "type": "town", "prio": 1},
-    {"name": "Štrbské Pleso", "alt": 1346, "x": 3.9, "y": 1.5, "type": "town", "prio": 1},
-    {"name": "Tatranská Polianka", "alt": 1005, "x": 7.7, "y": 0.5, "type": "town", "prio": 1},
-    {"name": "Vyšné Hágy", "alt": 1125, "x": 5.7, "y": 0.5, "type": "town", "prio": 1},
-    {"name": "Podbanské", "alt": 940, "x": 1.0, "y": 1.0, "type": "town", "prio": 1},
-    {"name": "Ždiar", "alt": 896, "x": 13.7, "y": 11.0, "type": "town", "prio": 1}
+    # --- OSADY A PODHORIE ---
+    {"name": "Starý Smokovec", "alt": 1010, "lat": 49.1411, "lon": 20.2219, "cat": "towns", "prio": 1},
+    {"name": "Tatranská Lomnica", "alt": 850, "lat": 49.1650, "lon": 20.2819, "cat": "towns", "prio": 1},
+    {"name": "Štrbské Pleso osada", "alt": 1346, "lat": 49.1194, "lon": 20.0603, "cat": "towns", "prio": 1},
+    {"name": "Tatranská Polianka", "alt": 1005, "lat": 49.1236, "lon": 20.1847, "cat": "towns", "prio": 1},
+    {"name": "Vyšné Hágy", "alt": 1125, "lat": 49.1194, "lon": 20.1250, "cat": "towns", "prio": 1},
+    {"name": "Podbanské", "alt": 940, "lat": 49.1417, "lon": 19.9028, "cat": "towns", "prio": 1},
+    {"name": "Ždiar", "alt": 896, "lat": 49.2717, "lon": 20.2714, "cat": "towns", "prio": 1},
+    {"name": "Poprad letisko/centrum", "alt": 672, "lat": 49.0594, "lon": 20.2972, "cat": "towns", "prio": 1}
 ]
 
 # =============================================================================
-# 2. DEFINÍCIA 35 DWD REFERENČNÝCH UZLOV (7 x 5 mriežka, rozostup ~2.2 km)
+# CACHING & LIVE SŤAHOVANIE DWD DÁT
 # =============================================================================
-DWD_GRID_X = np.linspace(0.0, 16000.0, 7)
-DWD_GRID_Y = np.linspace(0.0, 12000.0, 5)
+CACHE = {"ts": 0, "d_poprad": None, "d_lomnik": None}
 
-DWD_LATS = []
-DWD_LONS = []
-for gy in DWD_GRID_Y:
-    for gx in DWD_GRID_X:
-        lat = 49.115 + (gy / 12000.0) * (49.235 - 49.115)
-        lon = 19.960 + (gx / 16000.0) * (20.250 - 19.960)
-        DWD_LATS.append(round(lat, 4))
-        DWD_LONS.append(round(lon, 4))
-
-# =============================================================================
-# 3. GENERÁTOR 100m DEM TOPOGRAFIE TATIER (160 x 120 bodov)
-# =============================================================================
-def generate_tatras_100m_dem(grid_shape=(160, 120), dx=100.0, dy=100.0):
-    nx, ny = grid_shape
-    x = np.arange(nx) * dx
-    y = np.arange(ny) * dy
-    X, Y = np.meshgrid(x, y, indexing='ij')
-    
-    dem = 950.0 + (Y * 0.04)
-    ridge_y = 7000.0
-    main_ridge = 1450.0 * np.exp(-((Y - ridge_y)**2) / (2 * 1800.0**2))
-    dem += main_ridge * (1.0 + 0.15 * np.sin(X / 1200.0) * np.cos(X / 2400.0))
-    
-    spurs = 550.0 * np.exp(-((Y - 4500.0)**2) / (2 * 2000.0**2)) * np.maximum(np.cos(X / 1400.0), 0.0)**2
-    dem += spurs
-    
-    valleys = (
-        np.exp(-((X - 4800.0)**2) / (2 * 450.0**2)) +
-        np.exp(-((X - 7300.0)**2) / (2 * 400.0**2)) +
-        np.exp(-((X - 8300.0)**2) / (2 * 400.0**2)) +
-        np.exp(-((X - 9800.0)**2) / (2 * 500.0**2)) +
-        np.exp(-((X - 11000.0)**2) / (2 * 450.0**2))
-    ) * np.exp(-((Y - 5000.0)**2) / (2 * 2800.0**2))
-    dem -= valleys * 500.0
-
-    def add_peak(px, py, h, r):
-        return h * np.exp(-((X - px)**2 + (Y - py)**2) / (2 * r**2))
-
-    dem += add_peak(8000.0, 6200.0, 750.0, 550.0)
-    dem += add_peak(12000.0, 6800.0, 730.0, 500.0)
-    dem += add_peak(2700.0, 5000.0, 680.0, 600.0)
-    dem += add_peak(5700.0, 6000.0, 640.0, 450.0)
-    dem += add_peak(9700.0, 4000.0, 520.0, 450.0)
-    dem += add_peak(11000.0, 8000.0, 650.0, 480.0)
-    dem += add_peak(13300.0, 9500.0, 500.0, 450.0)
-
-    dem = ndimage.gaussian_filter(dem, sigma=1.0)
-    return X, Y, dem, dx, dy
-
-X_100, Y_100, DEM_100, DX, DY = generate_tatras_100m_dem()
-
-# =============================================================================
-# 4. SŤAHOVANIE 35-BODOVEJ MATICE DWD ICON
-# =============================================================================
-DWD_CACHE = {"timestamp": 0, "matrix": None}
-
-def fetch_35_nodes_dwd_icon():
+def fetch_live_dwd_data():
     now = datetime.datetime.now().timestamp()
-    if DWD_CACHE["matrix"] and (now - DWD_CACHE["timestamp"] < 600):
-        return DWD_CACHE["matrix"]
+    if CACHE["d_poprad"] and (now - CACHE["ts"] < 600):
+        return CACHE["d_poprad"], CACHE["d_lomnik"]
 
-    lat_str = ",".join(map(str, DWD_LATS))
-    lon_str = ",".join(map(str, DWD_LONS))
-    
-    url = (
-        f"https://api.open-meteo.com/v1/dwd-icon?"
-        f"latitude={lat_str}&longitude={lon_str}&hourly=temperature_2m,precipitation,"
-        f"wind_speed_10m,wind_direction_10m,cape&forecast_days=3&timezone=Europe%2FBratislava"
-    )
+    url_p = "https://api.open-meteo.com/v1/dwd-icon?latitude=49.06&longitude=20.30&hourly=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,cape&forecast_days=3&timezone=Europe%2FBratislava"
+    url_l = "https://api.open-meteo.com/v1/dwd-icon?latitude=49.20&longitude=20.21&hourly=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,cape&forecast_days=3&timezone=Europe%2FBratislava"
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheTatry-35NodeDWD/3.5'})
-        with urllib.request.urlopen(req, timeout=12) as response:
-            data = json.loads(response.read().decode())
-            DWD_CACHE["matrix"] = data
-            DWD_CACHE["timestamp"] = now
-            return data
+        req1 = urllib.request.Request(url_p, headers={'User-Agent': 'AvalancheTatry-PointGrid/4.0'})
+        req2 = urllib.request.Request(url_l, headers={'User-Agent': 'AvalancheTatry-PointGrid/4.0'})
+        with urllib.request.urlopen(req1, timeout=8) as r1:
+            dp = json.loads(r1.read().decode()).get("hourly", {})
+        with urllib.request.urlopen(req2, timeout=8) as r2:
+            dl = json.loads(r2.read().decode()).get("hourly", {})
+        
+        CACHE["d_poprad"] = dp
+        CACHE["d_lomnik"] = dl
+        CACHE["ts"] = now
+        return dp, dl
     except Exception as e:
-        print(f"[VAROVANIE] Multi-point DWD zlyhalo: {e}")
-        return None
+        print(f"[VAROVANIE] DWD API offline: {e}")
+        return None, None
 
-# =============================================================================
-# 5. PRIESTOROVÁ 2D INTERPOLÁCIA & OROGRAFICKÝ DOWNSCALING
-# =============================================================================
-def run_35_node_downscaled_step(step_idx: int):
+def calculate_point_grid_state(step_idx: int):
     hours_ahead = step_idx * 6
     cur_hour = datetime.datetime.now().hour
     data_idx = cur_hour + hours_ahead
 
-    dwd_raw = fetch_35_nodes_dwd_icon()
-    
-    dwd_t_grid = np.zeros((7, 5))
-    dwd_u_grid = np.zeros((7, 5))
-    dwd_v_grid = np.zeros((7, 5))
-    dwd_p_grid = np.zeros((7, 5))
-    dwd_dem_grid = np.zeros((7, 5))
+    dp, dl = fetch_live_dwd_data()
 
-    if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
-        idx = 0
-        for j in range(5):
-            for i in range(7):
-                node_data = dwd_raw[idx].get("hourly", {})
-                t2m = node_data.get("temperature_2m", [15.0])[data_idx] if len(node_data.get("temperature_2m", [])) > data_idx else 15.0
-                w_spd = (node_data.get("wind_speed_10m", [15.0])[data_idx] / 3.6) if len(node_data.get("wind_speed_10m", [])) > data_idx else 4.0
-                w_dir = node_data.get("wind_direction_10m", [315.0])[data_idx] if len(node_data.get("wind_direction_10m", [])) > data_idx else 315.0
-                prec = node_data.get("precipitation", [0.0])[data_idx] if len(node_data.get("precipitation", [])) > data_idx else 0.0
-                elevation = dwd_raw[idx].get("elevation", 1200.0)
-
-                rad = np.radians(270.0 - w_dir)
-                dwd_t_grid[i, j] = t2m
-                dwd_u_grid[i, j] = w_spd * np.cos(rad)
-                dwd_v_grid[i, j] = w_spd * np.sin(rad)
-                dwd_p_grid[i, j] = prec
-                dwd_dem_grid[i, j] = elevation
-                idx += 1
+    if dp and "temperature_2m" in dp and len(dp["temperature_2m"]) > data_idx:
+        t_poprad = dp["temperature_2m"][data_idx]
+        t_lomnik = dl["temperature_2m"][data_idx]
+        w_spd_base = dl["wind_speed_10m"][data_idx] / 3.6
+        w_dir_base = dl["wind_direction_10m"][data_idx]
+        precip_base = dl["precipitation"][data_idx]
+        cape_base = dl.get("cape", [0])[data_idx] or 0.0
     else:
         m = datetime.datetime.now().month
-        base_t = 20.0 if 5 <= m <= 9 else (6.0 if m in [4, 10] else -1.0)
-        for j in range(5):
-            for i in range(7):
-                dwd_dem_grid[i, j] = 1000.0 + j * 120.0
-                dwd_t_grid[i, j] = base_t - (dwd_dem_grid[i, j] - 672.0) * 0.0065
-                dwd_u_grid[i, j] = 3.5
-                dwd_v_grid[i, j] = -2.5
-                dwd_p_grid[i, j] = 0.0
+        t_poprad = 22.0 if 5 <= m <= 9 else (7.0 if m in [4, 10] else 0.0)
+        t_lomnik = t_poprad - 12.5
+        w_spd_base = 6.0
+        w_dir_base = 315.0
+        precip_base = 0.0
+        cape_base = 50.0
 
-    interp_t = RegularGridInterpolator((DWD_GRID_X, DWD_GRID_Y), dwd_t_grid, bounds_error=False, fill_value=None)
-    interp_u = RegularGridInterpolator((DWD_GRID_X, DWD_GRID_Y), dwd_u_grid, bounds_error=False, fill_value=None)
-    interp_v = RegularGridInterpolator((DWD_GRID_X, DWD_GRID_Y), dwd_v_grid, bounds_error=False, fill_value=None)
-    interp_p = RegularGridInterpolator((DWD_GRID_X, DWD_GRID_Y), dwd_p_grid, bounds_error=False, fill_value=None)
-    interp_dem = RegularGridInterpolator((DWD_GRID_X, DWD_GRID_Y), dwd_dem_grid, bounds_error=False, fill_value=None)
+    lapse_rate = np.clip((t_lomnik - t_poprad) / (2634.0 - 672.0), -0.0098, 0.002)
 
-    target_pts = np.array([X_100.ravel(), Y_100.ravel()]).T
-    t_dwd_100 = interp_t(target_pts).reshape(X_100.shape)
-    u_dwd_100 = interp_u(target_pts).reshape(X_100.shape)
-    v_dwd_100 = interp_v(target_pts).reshape(X_100.shape)
-    p_dwd_100 = interp_p(target_pts).reshape(X_100.shape)
-    dem_dwd_100 = interp_dem(target_pts).reshape(X_100.shape)
+    results = []
+    for p in TATRAS_POINTS:
+        # 1. Presná výšková teplota
+        t_pt = t_poprad + lapse_rate * (p["alt"] - 672.0)
 
-    height_diff = DEM_100 - dem_dwd_100
-    temp_field = t_dwd_100 - (height_diff * 0.0065)
+        # 2. Orografický vietor (speed-up na štítoch vs. útlm v lesnom pásme)
+        if p["cat"] == "peaks":
+            w_factor = 1.35 + (p["alt"] - 2000.0) * 0.0003
+        elif p["cat"] == "passes":
+            w_factor = 1.25  # Venturiho dýzový efekt v sedlách
+        elif p["cat"] == "huts":
+            w_factor = 0.95
+        elif p["cat"] == "lakes":
+            w_factor = 0.85
+        else: # towns
+            w_factor = 0.70
 
-    dh_dx, dh_dy = np.gradient(DEM_100, DX, DY)
-    slope = np.sqrt(dh_dx**2 + dh_dy**2)
-    aspect = np.arctan2(-dh_dx, dh_dy)
+        w_spd_pt = (w_spd_base * w_factor) * 3.6  # km/h
 
-    dem_base = ndimage.gaussian_filter(DEM_100, sigma=12)
-    h_rel = np.maximum(DEM_100 - dem_base, 0.0)
-    delta_S = np.clip((1.2 * h_rel / 2500.0), 0.0, 0.5)
-    u_spd = u_dwd_100 * (1.0 + delta_S)
-    v_spd = v_dwd_100 * (1.0 + delta_S)
+        # 3. Orografické zrážky
+        orographic_p_factor = 1.0 + max(p["alt"] - 1000.0, 0.0) * 0.00035
+        prec_pt = precip_base * orographic_p_factor if precip_base > 0 else 0.0
 
-    speed_init = np.sqrt(u_spd**2 + v_spd**2)
-    wind_dir = np.arctan2(v_spd, u_spd)
-    delta_theta = np.clip(-0.2 * (slope * 100.0) * np.sin(2.0 * (aspect - wind_dir)), -0.3, 0.3)
-    steered_dir = wind_dir + delta_theta
-    u_opt = speed_init * np.cos(steered_dir)
-    v_opt = speed_init * np.sin(steered_dir)
-    w_opt = u_opt * dh_dx + v_opt * dh_dy
-    wind_spd = np.sqrt(u_opt**2 + v_opt**2)
+        # 4. Sneh (iba ak mrzne a prší)
+        snow_pt = (prec_pt * 1.0 * 6.0) if t_pt < 0.0 else 0.0
 
-    p_final = np.maximum(p_dwd_100 * (1.0 + 0.35 * np.maximum(w_opt, 0.0)), 0.0)
-    snow_mask = temp_field < 0.0
-    fresh_snow_6h = np.where(snow_mask, p_final * 1.0 * 6.0, 0.0)
+        # 5. Lightning Hazard Index (LHI)
+        exposure = min(max(p["alt"] - 1000.0, 0.0) / 35.0, 45.0)
+        lhi_pt = min(max(exposure * 0.4 + (cape_base / 25.0), 0.0), 100.0)
+        if cape_base < 40.0 and precip_base == 0:
+            lhi_pt = min(lhi_pt * 0.1, 10.0)
 
-    exposure = np.clip((DEM_100 - 1000.0) / 35.0, 0.0, 40.0)
-    lhi = np.clip(ndimage.gaussian_filter(exposure * 0.4 + np.maximum(w_opt, 0.0) * 15.0, sigma=1.0), 0.0, 100.0)
+        results.append({
+            "name": p["name"],
+            "alt": p["alt"],
+            "lat": p["lat"],
+            "lon": p["lon"],
+            "cat": p["cat"],
+            "prio": p["prio"],
+            "temp": round(t_pt, 1),
+            "wind_kmh": round(w_spd_pt, 1),
+            "wind_dir": round(w_dir_base, 0),
+            "precip_mmh": round(prec_pt, 1),
+            "snow_6h_cm": round(snow_pt, 1),
+            "lhi": round(lhi_pt, 0)
+        })
 
     return {
-        'hours': hours_ahead,
-        'u_opt': u_opt, 'v_opt': v_opt,
-        'p_final': p_final, 'snow_diff': fresh_snow_6h,
-        'lhi': lhi, 'temp_field': temp_field, 'wind_spd': wind_spd,
-        'interp_t': interp_t, 'interp_dem': interp_dem
+        "status": "ok",
+        "step": step_idx,
+        "hours_ahead": hours_ahead,
+        "t_poprad": round(t_poprad, 1),
+        "t_lomnik": round(t_lomnik, 1),
+        "lapse_rate_c_100m": round(lapse_rate * 100.0, 2),
+        "count": len(results),
+        "points": results
     }
 
-FORECAST_TIMELINE = [run_35_node_downscaled_step(i) for i in range(9)]
-
 # =============================================================================
-# 6. VYKRESLENIE 35 DWD UZLOV A 200+ BODOV DO MÁP
-# =============================================================================
-def draw_dwd_nodes_and_landmarks(ax, is_compact=False):
-    dwd_x_km = DWD_GRID_X / 1000.0
-    dwd_y_km = DWD_GRID_Y / 1000.0
-    for gx in dwd_x_km:
-        for gy in dwd_y_km:
-            ax.plot(gx, gy, marker='D', markersize=3.0 if is_compact else 4.5, 
-                    color='#38bdf8', markeredgecolor='#0284c7', alpha=0.55, zorder=8)
-
-    for lm in TATRAS_CORE_POINTS:
-        ltype = lm["type"]
-        prio = lm["prio"]
-        
-        if ltype == "peak":
-            mcolor, marker = '#ef4444', '^'
-        elif ltype == "pass":
-            mcolor, marker = '#fbbf24', 'x'
-        elif ltype == "lake":
-            mcolor, marker = '#38bdf8', 'o'
-        elif ltype == "hut":
-            mcolor, marker = '#f59e0b', 's'
-        else:
-            mcolor, marker = '#a855f7', 'o'
-
-        msize = 4.5 if is_compact else 6.0
-        ax.plot(lm["x"], lm["y"], marker=marker, markersize=msize, color=mcolor, 
-                markeredgecolor='#000000', markeredgewidth=0.5, alpha=0.9, zorder=10)
-
-        if prio == 1:
-            fsize = 5.5 if is_compact else 7.5
-            label = lm['name'] if is_compact else f"{lm['name']}\n({lm['alt']}m)"
-            ax.text(lm["x"], lm["y"] + (0.3 if is_compact else 0.4), label,
-                    fontsize=fsize, fontweight='bold', color='white', ha='center',
-                    bbox=dict(boxstyle='round,pad=0.12', facecolor='#0f172a', edgecolor=mcolor, alpha=0.85, linewidth=0.6),
-                    zorder=11)
-
-# =============================================================================
-# 7. FASTAPI ENDPOINTY
+# FASTAPI ENDPOINTY
 # =============================================================================
 @app.get("/")
 def read_root():
     return {
         "status": "ok",
-        "service": "TATRYS-50 v2 35-Node DWD-ICON",
-        "dwd_nodes_count": 35,
-        "tatras_points_count": len(TATRAS_CORE_POINTS)
+        "service": "TATRYS-50 Point-Grid Engine",
+        "mode": "vector_points",
+        "points_count": len(TATRAS_POINTS)
     }
 
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
 
-@app.get("/api/landmarks")
-def get_landmarks():
-    return {"status": "ok", "count": len(TATRAS_CORE_POINTS), "landmarks": TATRAS_CORE_POINTS}
-
 @app.get("/api/points-grid")
-def get_points_grid(step: int = Query(0, ge=0, le=8)):
-    d = run_35_node_downscaled_step(step)
-    results = []
-    for p in TATRAS_CORE_POINTS:
-        px_m, py_m = p["x"] * 1000.0, p["y"] * 1000.0
-        ix = int(np.clip(px_m / DX, 0, DEM_100.shape[0] - 1))
-        iy = int(np.clip(py_m / DY, 0, DEM_100.shape[1] - 1))
-        
-        t_dwd_local = float(d['interp_t']([px_m, py_m])[0])
-        dem_dwd_local = float(d['interp_dem']([px_m, py_m])[0])
-        t_loc = t_dwd_local - ((p["alt"] - dem_dwd_local) * 0.0065)
-        
-        spd_loc = float(d['wind_spd'][ix, iy] * 3.6)
-        prec_loc = float(d['p_final'][ix, iy])
-        sn_loc = float(d['snow_diff'][ix, iy])
-        lh_loc = float(d['lhi'][ix, iy])
-
-        results.append({
-            "name": p["name"],
-            "alt": p["alt"],
-            "type": p["type"],
-            "x": p["x"],
-            "y": p["y"],
-            "temp": round(t_loc, 1),
-            "wind_kmh": round(spd_loc, 1),
-            "precip_mmh": round(prec_loc, 1),
-            "snow_6h_cm": round(sn_loc, 1),
-            "lhi": round(lh_loc, 0)
-        })
-    return {"status": "ok", "step": step, "hours_ahead": d["hours"], "count": len(results), "points": results}
-
 @app.get("/api/forecast")
-@app.get("/api/stations")
-def get_forecast(step: int = Query(0, ge=0, le=8)):
-    d = run_35_node_downscaled_step(step)
-    locs = [
-        {"name": "Lomnický štít (2 634 m)", "alt": 2634, "x": 12.0, "y": 6.8},
-        {"name": "Gerlachovský štít (2 655 m)", "alt": 2655, "x": 8.0, "y": 6.2},
-        {"name": "Téryho chata (2 015 m)", "alt": 2015, "x": 10.8, "y": 6.8},
-        {"name": "Zbojnícka chata (1 960 m)", "alt": 1960, "x": 9.2, "y": 5.8},
-        {"name": "Štrbské Pleso (1 346 m)", "alt": 1346, "x": 3.9, "y": 1.5},
-        {"name": "Starý Smokovec (1 010 m)", "alt": 1010, "x": 9.5, "y": 0.5}
-    ]
-    res = []
-    for l in locs:
-        px_m, py_m = l["x"] * 1000.0, l["y"] * 1000.0
-        ix = int(np.clip(px_m / DX, 0, DEM_100.shape[0]-1))
-        iy = int(np.clip(py_m / DY, 0, DEM_100.shape[1]-1))
-        
-        t_dwd_local = float(d['interp_t']([px_m, py_m])[0])
-        dem_dwd_local = float(d['interp_dem']([px_m, py_m])[0])
-        t_loc = t_dwd_local - ((l["alt"] - dem_dwd_local) * 0.0065)
-        
-        spd = float(d['wind_spd'][ix, iy] * 3.6)
-        p = float(d['p_final'][ix, iy])
-        s = float(d['snow_diff'][ix, iy])
-        lh = float(d['lhi'][ix, iy])
-        res.append({
-            "name": l['name'],
-            "temp": round(t_loc, 1),
-            "wind_kmh": round(spd, 1),
-            "precip_mmh": round(p, 1),
-            "snow_6h_cm": round(s, 1),
-            "lightning_risk": "Vysoké" if lh > 50 else ("Stredné" if lh > 20 else "Nízke"),
-            "lhi_raw": round(lh, 0)
-        })
-    return {"status": "ok", "step": step, "hours_ahead": d['hours'], "stations": res}
+def get_points_grid(step: int = Query(0, ge=0, le=8)):
+    return calculate_point_grid_state(step)
 
-@app.get("/api/render-map")
-def render_map(layer: str = Query("all"), step: int = Query(0, ge=0, le=8)):
-    d = run_35_node_downscaled_step(step)
-    X_km, Y_km = X_100 / 1000.0, Y_100 / 1000.0
-    h_label = f"+{d['hours']}h"
-    
-    if layer == "all":
-        fig, axs = plt.subplots(2, 2, figsize=(16, 12), facecolor='#0f172a')
-        for row in axs:
-            for ax in row:
-                ax.set_facecolor('#1e293b')
-                ax.tick_params(colors='#94a3b8')
-                ax.set_xlabel('Západ -> Východ (km)', color='#94a3b8', fontsize=8.5)
-                ax.set_ylabel('Juh -> Sever (km)', color='#94a3b8', fontsize=8.5)
-                for s in ax.spines.values():
-                    s.set_color('#334155')
+@app.get("/api/hazards")
+def get_hazards_24h():
+    """Rýchla analýza extrémov naprieč všetkými bodmi na 24 hodín."""
+    hazards = []
+    base_dt = datetime.datetime.now()
 
-        # 1. Topografia & Vietor
-        im1 = axs[0, 0].contourf(X_km, Y_km, DEM_100, levels=25, cmap='terrain', alpha=0.85)
-        fig.colorbar(im1, ax=axs[0, 0])
-        axs[0, 0].quiver(X_km[::6, ::6], Y_km[::6, ::6], d['u_opt'][::6, ::6], d['v_opt'][::6, ::6], scale=110, color='black')
-        draw_dwd_nodes_and_landmarks(axs[0, 0], is_compact=True)
-        axs[0, 0].set_title(f'A. Topografia Tatier & Vietor (35 DWD uzlov) [{h_label}]', color='white', fontweight='bold')
+    for step in range(5):
+        data = calculate_point_grid_state(step)
+        t_str = (base_dt + datetime.timedelta(hours=data["hours_ahead"])).strftime("%d.%m. %H:%M") + f" (+{data['hours_ahead']}h)"
 
-        # 2. Zrážky
-        im2 = axs[0, 1].contourf(X_km, Y_km, d['p_final'], levels=20, cmap='YlGnBu')
-        fig.colorbar(im2, ax=axs[0, 1], label='mm / h')
-        draw_dwd_nodes_and_landmarks(axs[0, 1], is_compact=True)
-        axs[0, 1].set_title(f'B. Zrážky (35-bodový DWD Downscale) [{h_label}]', color='white', fontweight='bold')
+        for p in data["points"]:
+            if p["wind_kmh"] >= 105.0:
+                hazards.append({
+                    "severity": "extreme",
+                    "type": "Orkán / Víchrica na hrebeni",
+                    "icon": "fa-wind",
+                    "location": p["name"],
+                    "alt": p["alt"],
+                    "time": t_str,
+                    "value": f"{p['wind_kmh']} km/h",
+                    "desc": "Extrémna sila vetra na štítoch a exponovaných trasách."
+                })
+            elif p["wind_kmh"] >= 80.0 and p["cat"] in ["towns", "huts"]:
+                hazards.append({
+                    "severity": "high",
+                    "type": "Tatranská Bóra / Silný vietor",
+                    "icon": "fa-wind",
+                    "location": p["name"],
+                    "alt": p["alt"],
+                    "time": t_str,
+                    "value": f"{p['wind_kmh']} km/h",
+                    "desc": "Padavý vietor v lesnom pásme. Pozor na padajúce konáre."
+                })
+            if p["lhi"] >= 65.0:
+                hazards.append({
+                    "severity": "extreme",
+                    "type": "Riziko zásahu bleskom",
+                    "icon": "fa-bolt",
+                    "location": p["name"],
+                    "alt": p["alt"],
+                    "time": t_str,
+                    "value": f"LHI {p['lhi']}/100",
+                    "desc": "Akútne nebezpečenstvo bleskov na vrcholoch a hrebeňoch."
+                })
+            if p["precip_mmh"] >= 12.0:
+                hazards.append({
+                    "severity": "high",
+                    "type": "Prívalový lejak",
+                    "icon": "fa-cloud-showers-water",
+                    "location": p["name"],
+                    "alt": p["alt"],
+                    "time": t_str,
+                    "value": f"{p['precip_mmh']} mm/h",
+                    "desc": "Intenzívne zrážky. Riziko rozvodnenia horských bystrín."
+                })
+            if p["snow_6h_cm"] >= 15.0:
+                hazards.append({
+                    "severity": "high",
+                    "type": "Intenzívne sneženie & Záveje",
+                    "icon": "fa-snowflake",
+                    "location": p["name"],
+                    "alt": p["alt"],
+                    "time": t_str,
+                    "value": f"+{p['snow_6h_cm']} cm",
+                    "desc": "Rýchly prírastok snehu a nafúkané snehové dosky."
+                })
 
-        # 3. Sneh
-        im3 = axs[1, 0].contourf(X_km, Y_km, d['snow_diff'], levels=20, cmap='Blues')
-        fig.colorbar(im3, ax=axs[1, 0], label='cm / 6h')
-        draw_dwd_nodes_and_landmarks(axs[1, 0], is_compact=True)
-        axs[1, 0].set_title(f'C. Nový sneh za 6h [{h_label}]', color='white', fontweight='bold')
+    unique_hazards = []
+    seen = set()
+    for h in hazards:
+        key = (h["type"], h["location"], h["time"])
+        if key not in seen:
+            seen.add(key)
+            unique_hazards.append(h)
 
-        # 4. Teplota
-        im4 = axs[1, 1].contourf(X_km, Y_km, d['temp_field'], levels=25, cmap='coolwarm')
-        fig.colorbar(im4, ax=axs[1, 1], label='°C')
-        draw_dwd_nodes_and_landmarks(axs[1, 1], is_compact=True)
-        axs[1, 1].set_title(f'D. Teplotné pole (35-DWD Lapserate) [{h_label}]', color='white', fontweight='bold')
-
-        fig.tight_layout()
-    else:
-        fig, ax = plt.subplots(figsize=(11, 8.5), facecolor='#0f172a')
-        ax.set_facecolor('#1e293b')
-        ax.tick_params(colors='#94a3b8')
-        ax.set_xlabel('Západ -> Východ (km)', color='#94a3b8', fontsize=9.5)
-        ax.set_ylabel('Juh -> Sever (km)', color='#94a3b8', fontsize=9.5)
-
-        if layer == "wind":
-            im = ax.contourf(X_km, Y_km, DEM_100, levels=25, cmap='terrain', alpha=0.85)
-            ax.quiver(X_km[::5, ::5], Y_km[::5, ::5], d['u_opt'][::5, ::5], d['v_opt'][::5, ::5], scale=95, color='black')
-            fig.colorbar(im, ax=ax, label='Výška (m n.m.)')
-            ax.set_title(f'Prúdenie vetra (35 DWD referenčných bodov) [{h_label}]', color='white', fontweight='bold')
-        elif layer == "precip":
-            im = ax.contourf(X_km, Y_km, d['p_final'], levels=20, cmap='YlGnBu')
-            fig.colorbar(im, ax=ax, label='mm / h')
-            ax.set_title(f'Zrážková intenzita (Seeder-Feeder) [{h_label}]', color='white', fontweight='bold')
-        elif layer == "snow":
-            im = ax.contourf(X_km, Y_km, d['snow_diff'], levels=20, cmap='Blues')
-            fig.colorbar(im, ax=ax, label='cm / 6h')
-            ax.set_title(f'Nový sneh za 6h [{h_label}]', color='white', fontweight='bold')
-        elif layer == "lightning":
-            im = ax.contourf(X_km, Y_km, d['lhi'], levels=20, cmap='YlOrRd')
-            fig.colorbar(im, ax=ax, label='LHI (0-100)')
-            ax.set_title(f'Index rizika bleskov (LHI) [{h_label}]', color='white', fontweight='bold')
-        draw_dwd_nodes_and_landmarks(ax, is_compact=False)
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor=fig.get_facecolor())
-    plt.close(fig)
-    buf.seek(0)
-    return Response(content=buf.getvalue(), media_type="image/png")
+    unique_hazards.sort(key=lambda x: (0 if x["severity"] == "extreme" else 1))
+    return {
+        "status": "ok",
+        "has_hazards": len(unique_hazards) > 0,
+        "count": len(unique_hazards),
+        "hazards": unique_hazards[:12]
+    }
 
 if __name__ == "__main__":
     import uvicorn
