@@ -356,7 +356,7 @@ def fetch_sounding_ganovce():
                 risk_level = "low"
 
             data = {
-                "station": "Poprad-Gánovce (Aerologický výstup / GFS Model)",
+                "station": "Poprad-Gánovce (11952)",
                 "elevation_m": 708,
                 "timestamp_str": datetime.datetime.now().strftime("%d.%m. %H:%M"),
                 "cape_jkg": round(float(cape_val), 1),
@@ -366,7 +366,13 @@ def fetch_sounding_ganovce():
                 "deep_layer_shear_mps": shear_0_6km,
                 "storm_potential_type": storm_desc,
                 "risk_level": risk_level,
-                "freezing_level_m": 3350
+                "freezing_level_m": 3350,
+                "levels": [
+                    {"name": "Povrch (Gánovce)", "alt": 708, "temp": round(float(t_surface), 1), "rh": 65, "wind": f"{round(float(get_val('wind_speed_10m', 5, cur_h))*3.6, 1)} km/h"},
+                    {"name": "850 hPa (~1.5 km)", "alt": 1460, "temp": round(float(get_val('temperature_850hPa', 10, cur_h)), 1), "rh": 70, "wind": f"{round(wspd_850*3.6, 1)} km/h"},
+                    {"name": "700 hPa (~3.0 km)", "alt": 3020, "temp": round(float(get_val('temperature_700hPa', 2, cur_h)), 1), "rh": 60, "wind": "--"},
+                    {"name": "500 hPa (~5.6 km)", "alt": 5600, "temp": round(float(get_val('temperature_500hPa', -15, cur_h)), 1), "rh": 45, "wind": f"{round(wspd_500*3.6, 1)} km/h"}
+                ]
             }
             SOUNDING_CACHE["data"] = data
             SOUNDING_CACHE["ts"] = now
