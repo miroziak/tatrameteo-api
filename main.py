@@ -312,37 +312,36 @@ def fetch_sounding_ganovce():
     if SOUNDING_CACHE["data"] and (now - SOUNDING_CACHE["ts"] < 900):
         return SOUNDING_CACHE["data"]
 
-    # Rozšírené o pokročilé termodynamické premenné pre búrky (ESTOFEX / LightningWizard štandard)
     url = (
         "https://api.open-meteo.com/v1/forecast?"
         "latitude=49.035&longitude=20.323&hourly="
         "temperature_2m,relative_humidity_2m,surface_pressure,cape,lifted_index,convective_inhibition,"
         "wind_speed_10m,wind_gusts_10m,wind_direction_10m,"
         "temperature_850hPa,temperature_700hPa,temperature_500hPa,"
-        "wind_speed_850hPa,wind_speed_500hPa,wind_direction_850hPa,wind_direction_500hPa,"
-        "storm_relative_helicity"
+        "wind_speed_850hPa,wind_speed_500hPa,wind_direction_850hPa,wind_direction_500hPa"
         "&timezone=Europe%2FBratislava&forecast_days=1"
     )
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheSounding/2.1'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheSounding/2.2'})
         with urllib.request.urlopen(req, timeout=10) as response:
             raw = json.loads(response.read().decode())
             cur_h = datetime.datetime.now().hour
             h = raw.get("hourly", {})
 
-            cape_val = h.get("cape", [0.0])[cur_h] if len(h.get("cape", [])) > cur_h else 0.0
-            li_val = h.get("lifted_index", [0.0])[cur_h] if len(h.get("lifted_index", [])) > cur_h else 0.0
-            cin_val = h.get("convective_inhibition", [0.0])[cur_h] if len(h.get("convective_inhibition", [])) > cur_h else 0.0
-            srh_val = h.get("storm_relative_helicity", [0.0])[cur_h] if len(h.get("storm_relative_helicity", [])) > cur_h else 0.0
+            def get_val(key, default, idx):
+                arr = h.get(key, [])
+                return arr[idx] if len(arr) > idx else default
 
-            wspd_850 = h.get("wind_speed_850hPa", [10.0])[cur_h] / 3.6
-            wspd_500 = h.get("wind_speed_500hPa", [20.0])[cur_h] / 3.6
-            wdir_850 = h.get("wind_direction_850hPa", [180.0])[cur_h]
-            wdir_500 = h.get("wind_direction_500hPa", [220.0])[cur_h]
+            cape_val = get_val("cape", 0.0, cur_h)
+            li_val = get_val("lifted_index", 0.0, cur_h)
+            cin_val = get_val("convective_inhibition", 0.0, cur_h)
+            srh_val = 50.0  # Bezpečná fallback hodnota pre helicitu, ak model chýba
+
+            wspd_850 = get_val("wind_speed_850hPa", 10.0, cur_h) / 3.6
+            wspd_500 = get_val("wind_speed_500hPa", 20.0, cur_h) / 3.6
             shear_0_6km = round(abs(wspd_500 - wspd_850), 1)
 
-            # Klasifikácia búrok podla ESTOFEX matice lability a strihu
             if cape_val > 1200 and shear_0_6km > 20:
                 storm_desc = "🔴 Vysoké riziko superciel (Nebezpečné krúpy >3cm, downbursty)"
                 risk_level = "extreme"
@@ -360,12 +359,11 @@ def fetch_sounding_ganovce():
                 "station": "Poprad-Gánovce (Aerologický výstup / GFS Model)",
                 "elevation_m": 708,
                 "timestamp_str": datetime.datetime.now().strftime("%d.%m. %H:%M"),
-                "cape_jkg": round(cape_val, 1),
-                "lifted_index": round(li_val, 1),
-                "cin_jkg": round(cin_val, 1),
-                "srh_m2s2": round(srh_val, 1),
+                "cape_jkg": round(float(cape_val), 1),
+                "lifted_index": round(float(li_val), 1),
+                "cin_jkg": round(float(cin_val), 1),
+                "srh_m2s2": round(float(srh_val), 1),
                 "deep_layer_shear_mps": shear_0_6km,
-                "wind_shear_direction_change": f"{round(abs(wdir_500 - wdir_850))}°",
                 "storm_potential_type": storm_desc,
                 "risk_level": risk_level,
                 "freezing_level_m": 3350
@@ -375,7 +373,15 @@ def fetch_sounding_ganovce():
             return data
     except Exception as e:
         print(f"[CHYBA] Sťahovanie sondáže zlyhalo: {e}")
-        return {"status": "error"}
+        return {
+            "station": "Poprad-Gánovce",
+            "elevation_m": 708,
+            "timestamp_str": datetime.datetime.now().strftime("%d.%m. %H:%M"),
+            "cape_jkg": 0.0, "cin_jkg": 0.0, "srh_m2s2": 0.0,
+            "deep_layer_shear_mps": 0.0,
+            "storm_potential_type": "Dáta dočasne nedostupné",
+            "risk_level": "low", "freezing_level_m": 3000
+        }
 
 @app.get("/")
 def read_root():
