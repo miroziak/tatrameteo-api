@@ -315,7 +315,7 @@ def fetch_sounding_ganovce():
     url = (
         "https://api.open-meteo.com/v1/forecast?"
         "latitude=49.035&longitude=20.323&hourly="
-        "temperature_2m,relative_humidity_2m,surface_pressure,cape,lifted_index,convective_inhibition,"
+        "temperature_2m,relative_humidity_2m,precipitation,surface_pressure,cape,lifted_index,convective_inhibition,"
         "wind_speed_10m,wind_gusts_10m,wind_direction_10m,"
         "temperature_850hPa,temperature_700hPa,temperature_500hPa,"
         "wind_speed_850hPa,wind_speed_500hPa,wind_direction_850hPa,wind_direction_500hPa"
@@ -323,7 +323,7 @@ def fetch_sounding_ganovce():
     )
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheSounding/2.4'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheSounding/2.5'})
         with urllib.request.urlopen(req, timeout=10) as response:
             raw = json.loads(response.read().decode())
             cur_h = datetime.datetime.now().hour
@@ -338,6 +338,7 @@ def fetch_sounding_ganovce():
             cape_val = float(get_val("cape", 0.0, cur_h))
             li_val = float(get_val("lifted_index", 0.0, cur_h))
             cin_val = float(get_val("convective_inhibition", 0.0, cur_h))
+            precip_val = float(get_val("precipitation", 0.0, cur_h))
             srh_val = 50.0
 
             t_surface = float(get_val("temperature_2m", 15.0, cur_h))
@@ -352,13 +353,18 @@ def fetch_sounding_ganovce():
             
             shear_0_6km = round(abs(wspd_500 - wspd_850), 1)
 
+            # Orografický override pre Tatry: ak model hlási 0 CAPE, ale padajú zrážky pri teplote > 15°C, ide o lokálnu konvekciu z tepla
+            if cape_val < 10.0 and precip_val > 0.1 and t_surface > 15.0:
+                cape_val = 250.0 + (precip_val * 40.0)
+                li_val = -2.1
+
             if cape_val > 1200 and shear_0_6km > 20:
                 storm_desc = "🔴 Vysoké riziko superciel (Nebezpečné krúpy >3cm, downbursty)"
                 risk_level = "extreme"
             elif cape_val > 600 and shear_0_6km > 14:
                 storm_desc = "🟠 Organizované búrkové línie / Squall line (Prívalové dažde, silný vietor)"
                 risk_level = "high"
-            elif cape_val > 200:
+            elif cape_val > 200 or (precip_val > 0.0 and t_surface > 14.0):
                 storm_desc = "🟡 Orografické pulzové búrky (Lokálne blesky a prívalové zrážky)"
                 risk_level = "moderate"
             else:
@@ -393,8 +399,8 @@ def fetch_sounding_ganovce():
             "station": "Poprad-Gánovce",
             "elevation_m": 708,
             "timestamp_str": datetime.datetime.now().strftime("%d.%m. %H:%M"),
-            "cape_jkg": 150.0, "cin_jkg": -10.0, "srh_m2s2": 45.0,
-            "deep_layer_shear_mps": 14.0,
+            "cape_jkg": 180.0, "cin_jkg": -10.0, "srh_m2s2": 45.0,
+            "deep_layer_shear_mps": 12.0,
             "storm_potential_type": "🟡 Orografické pulzové búrky (Lokálne blesky)",
             "risk_level": "moderate", "freezing_level_m": 3100,
             "levels": [
