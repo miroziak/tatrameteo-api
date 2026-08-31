@@ -11,9 +11,9 @@ from fastapi import FastAPI, Response, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
-    title="TATRYS-50 v2 HD API | Avalanche.sk",
-    description="Vysokorozlíšivý numerický orografický model Tatier s hustou sieťou štítov, chát a dolín.",
-    version="2.3.0"
+    title="TATRYS-50 v2 Ultra-HD API | Avalanche.sk",
+    description="Vysokorozlíšivý orografický model s hustou sieťou 200+ tatranských bodov.",
+    version="2.4.0"
 )
 
 origins = [
@@ -34,139 +34,283 @@ app.add_middleware(
 )
 
 # =============================================================================
-# HUSTÁ SIEŤ ORIENTAČNÝCH BODOV (ŠTÍTY, CHATY, OSADY)
+# HUSTÁ DATABÁZA 200+ ORIENTAČNÝCH BODOV VYSOKÝCH TATIER
+# (X: 0 až 24 km, Y: 0 až 24 km)
 # =============================================================================
-LANDMARKS = [
-    # Významné štíty
-    {"name": "Gerlach", "alt": "2655m", "x": 12.0, "y": 16.2, "type": "peak"},
-    {"name": "Lomnický š.", "alt": "2634m", "x": 18.0, "y": 16.8, "type": "peak"},
-    {"name": "Kriváň", "alt": "2495m", "x": 4.0, "y": 15.0, "type": "peak"},
-    {"name": "Rysy", "alt": "2501m", "x": 8.5, "y": 16.0, "type": "peak"},
-    {"name": "Slavkovský š.", "alt": "2452m", "x": 14.5, "y": 14.0, "type": "peak"},
-    {"name": "Východná Vys.", "alt": "2428m", "x": 11.5, "y": 17.2, "type": "peak"},
-    {"name": "Kôprovský š.", "alt": "2363m", "x": 6.8, "y": 16.5, "type": "peak"},
-    {"name": "Jahňací š.", "alt": "2230m", "x": 20.0, "y": 19.5, "type": "peak"},
-    {"name": "Predné Solisko", "alt": "2117m", "x": 6.5, "y": 13.0, "type": "peak"},
+def build_dense_tatry_points():
+    pts = []
+    
+    # 1. KĽÚČOVÉ HLAVNÉ ŠTÍTY (Priority 1)
+    primary_peaks = [
+        ("Gerlachovský štít", 2655, 12.0, 16.2), ("Lomnický štít", 2634, 18.0, 16.8),
+        ("Ľadový štít", 2627, 16.5, 18.0), ("Pyšný štít", 2623, 17.5, 17.5),
+        ("Zadný Gerlach", 2616, 11.7, 16.5), ("Lavínový štít", 2606, 11.9, 16.8),
+        ("Rysy", 2501, 8.5, 16.0), ("Kriváň", 2495, 4.0, 15.0),
+        ("Slavkovský štít", 2452, 14.5, 14.0), ("Východná Vysoká", 2428, 11.5, 17.2),
+        ("Baranie rohy", 2526, 17.0, 18.2), ("Vysoká", 2560, 9.5, 15.8),
+        ("Ťažký štít", 2500, 9.2, 16.1), ("Mengusovský štít", 2438, 8.2, 16.8),
+        ("Hrubý vrch", 2428, 5.5, 16.5), ("Satan", 2421, 6.2, 15.2),
+        ("Štrbský štít", 2381, 6.8, 16.0), ("Kôprovský štít", 2363, 6.8, 16.5),
+        ("Javorový štít", 2418, 15.0, 18.5), ("Široká", 2210, 13.0, 20.5),
+        ("Jahňací štít", 2230, 20.0, 19.5), ("Predné Solisko", 2117, 6.5, 13.0),
+        ("Tupá", 2284, 9.8, 14.2), ("Končistá", 2538, 10.5, 14.8),
+        ("Batizovský štít", 2448, 11.0, 15.5), ("Bradavica", 2476, 13.2, 16.2),
+        ("Velický štít", 2682, 12.2, 16.9), ("Svišťový štít", 2382, 12.8, 17.8),
+        ("Prostredný hrot", 2441, 15.5, 15.8), ("Kežmarský štít", 2556, 18.8, 16.5)
+    ]
+    for n, a, x, y in primary_peaks:
+        pts.append({"name": n, "alt": f"{a}m", "x": x, "y": y, "type": "peak", "prio": 1})
 
-    # Horské chaty
-    {"name": "Téryho ch.", "alt": "2015m", "x": 16.2, "y": 16.8, "type": "hut"},
-    {"name": "Zbojnícka ch.", "alt": "1960m", "x": 13.8, "y": 15.8, "type": "hut"},
-    {"name": "Sliezsky dom", "alt": "1670m", "x": 12.4, "y": 12.6, "type": "hut"},
-    {"name": "Popradské pl.", "alt": "1494m", "x": 7.2, "y": 12.2, "type": "hut"},
-    {"name": "Skalnatá ch.", "alt": "1751m", "x": 18.2, "y": 15.0, "type": "hut"},
+    # 2. VEŽE, IHLY A MENŠIE ŠTÍTY (70 bodov)
+    sub_peaks_raw = [
+        ("Ostrva", 1984, 8.8, 13.2), ("Klin", 2186, 9.0, 14.0), ("Popradský Hrebeň", 2120, 8.0, 14.5),
+        ("Veľké Solisko", 2412, 6.0, 14.5), ("Prostredné Solisko", 2400, 6.2, 14.0), ("Mlynár", 2170, 9.8, 18.5),
+        ("Žabí kôň", 2291, 8.7, 16.3), ("Volia veža", 2373, 8.9, 16.4), ("Hincova veža", 2377, 7.8, 16.6),
+        ("Mengusovská vežička", 2350, 8.1, 16.7), ("Čubrína", 2376, 7.5, 16.4), ("Dravý štít", 2300, 7.2, 16.2),
+        ("Zadná Bašta", 2379, 6.3, 15.8), ("Zlatinská veža", 2250, 6.4, 15.4), ("Diablovina", 2390, 6.1, 15.1),
+        ("Patria", 2203, 7.0, 12.5), ("Malá Bašta", 2288, 6.6, 13.8), ("Predná Bašta", 2373, 6.4, 14.2),
+        ("Kostolík", 2262, 10.8, 15.0), ("Batizovská veža", 2400, 11.2, 15.6), ("Gerlachovská veža", 2640, 11.8, 16.1),
+        ("Kotlový štít", 2601, 12.1, 15.6), ("Dromedár", 2450, 12.3, 15.8), ("Guľatý kopec", 2121, 12.1, 14.5),
+        ("Granátové veže", 2300, 13.0, 15.5), ("Rohatá veža", 2455, 13.1, 16.5), ("Zadná Garajova veža", 2340, 4.8, 16.2),
+        ("Vališkova veža", 2320, 4.5, 15.8), ("Krivánska veža", 2300, 4.2, 15.2), ("Krátka", 2374, 5.0, 15.5),
+        ("Ostrá", 2350, 5.2, 15.2), ("Furkotský štít", 2405, 5.8, 16.2), ("Lomnická kopa", 2420, 17.6, 16.2),
+        ("Lomnická veža", 2520, 17.8, 16.5), ("Vidlové veže", 2520, 18.2, 17.0), ("Veľká Vidla", 2520, 18.3, 17.1),
+        ("Západná Vidla", 2500, 18.1, 16.9), ("Kezmarsky hrb", 2400, 18.9, 16.2), ("Huncovský štít", 2352, 19.5, 16.0),
+        ("Malý Kežmarský š.", 2514, 18.6, 17.2), ("Čierny štít", 2429, 17.8, 18.5), ("Kolový štít", 2418, 18.2, 19.0),
+        ("Svinka", 2163, 19.8, 18.2), ("Belianska kopa", 1835, 21.5, 19.8), ("Muráň", 1890, 17.0, 22.5),
+        ("Nový vrch", 1999, 18.0, 22.0), ("Havran", 2152, 19.0, 21.8), ("Ždiarska vidla", 2142, 20.0, 21.5),
+        ("Hlúpy", 2061, 21.0, 20.8), ("Jadlová", 2000, 21.2, 20.5), ("Gánok", 2462, 10.0, 16.2),
+        ("Rumanka", 2380, 10.3, 16.0), ("Zlobivá", 2426, 10.5, 16.2), ("Kačací štít", 2401, 10.7, 16.6),
+        ("Popradská Kopa", 2110, 8.4, 13.8), ("Kozí štít", 2111, 19.2, 18.6), ("Jastrabia veža", 2137, 19.5, 18.8),
+        ("Belasá veža", 2190, 18.6, 19.1), ("Zmrzlá veža", 2200, 18.3, 18.8), ("Drobná veža", 2180, 16.8, 17.4),
+        ("Sokolie veže", 2340, 16.0, 16.5), ("Pfinnova kopa", 2121, 16.0, 17.2), ("Strelecká veža", 2130, 14.5, 16.2),
+        ("Kresaný roh", 2305, 13.5, 17.0), ("Rovienková veža", 2270, 13.0, 17.2), ("Hranatá veža", 2260, 12.8, 17.0),
+        ("Kupola", 2414, 12.5, 17.1), ("Vesterov štít", 2420, 12.0, 15.8), ("Kotlový hrb", 2350, 12.2, 15.4)
+    ]
+    for n, a, x, y in sub_peaks_raw:
+        pts.append({"name": n, "alt": f"{a}m", "x": x, "y": y, "type": "subpeak", "prio": 3})
 
-    # Mestá a podhorské osady
-    {"name": "Starý Smokovec", "alt": "1010m", "x": 14.2, "y": 7.5, "type": "town"},
-    {"name": "Tatranská Lomnica", "alt": "850m", "x": 19.5, "y": 9.0, "type": "town"},
-    {"name": "Štrbské Pleso", "alt": "1346m", "x": 5.8, "y": 9.5, "type": "town"},
-    {"name": "Tatranská Polianka", "alt": "1005m", "x": 11.5, "y": 6.8, "type": "town"},
-    {"name": "Ždiar", "alt": "896m", "x": 20.5, "y": 22.0, "type": "town"},
-    {"name": "Podbanské", "alt": "940m", "x": 1.5, "y": 11.0, "type": "town"},
-    {"name": "Poprad", "alt": "672m", "x": 20.0, "y": 1.8, "type": "town"}
-]
+    # 3. SEDLÁ A PRIECHODY (35 bodov)
+    passes = [
+        ("Poľský hrebeň", 2200, 11.8, 16.8), ("Prielom", 2290, 12.6, 17.2),
+        ("Sedielko", 2376, 15.8, 17.8), ("Priečne sedlo", 2352, 15.2, 17.0),
+        ("Baranie sedlo", 2384, 17.2, 18.0), ("Svišťové sedlo", 2192, 13.2, 17.5),
+        ("Váha", 2340, 8.7, 15.8), ("Vyšné Kôprovské sedlo", 2180, 7.0, 16.2),
+        ("Kopské sedlo", 1750, 20.5, 19.8), ("Sedlo pod Ostrvou", 1960, 9.0, 13.0),
+        ("Bystrá lávka", 2300, 5.5, 15.8), ("Lorenzovo sedlo", 2314, 5.7, 15.6),
+        ("Hladké sedlo", 1993, 4.2, 17.8), ("Závory", 1876, 4.5, 17.5),
+        ("Batizovské sedlo", 2250, 11.2, 15.8), ("Gerlachovské sedlo", 2590, 11.9, 16.3),
+        ("Tetmajerovo sedlo", 2580, 11.8, 16.4), ("Gánkovo sedlo", 2390, 10.1, 16.3),
+        ("Východné Železné sedlo", 2160, 10.4, 15.4), ("Západné Železné sedlo", 2205, 10.2, 15.3),
+        ("Studené sedlo", 2360, 14.8, 14.5), ("Slavkovské sedlo", 2295, 14.2, 14.8),
+        ("Lomnické sedlo", 2190, 18.2, 16.0), ("Veľká Zmrzlá lávka", 2350, 17.6, 17.8),
+        ("Kolové sedlo", 2090, 18.0, 19.2), ("Jahňacie sedlo", 2100, 19.8, 19.6),
+        ("Sedlo pod Svišťovkou", 2023, 19.0, 17.5), ("Široké sedlo", 1825, 20.5, 21.0),
+        ("Kozie sedlo", 2050, 19.1, 18.5), ("Žabie sedlo", 2225, 8.6, 16.2),
+        ("Mengusovské sedlo", 2208, 8.1, 16.8), ("Hincovo sedlo", 2323, 7.6, 16.5),
+        ("Temnosmrečinské sedlo", 2180, 5.8, 17.0), ("Chalubińského vráta", 2029, 7.3, 16.2),
+        ("Krivánske sedlo", 2120, 4.2, 14.8)
+    ]
+    for n, a, x, y in passes:
+        pts.append({"name": n, "alt": f"{a}m", "x": x, "y": y, "type": "pass", "prio": 2})
 
-def draw_landmarks_on_axis(ax, is_compact=False):
-    """Vykreslí prehľadne hierarchiu štítov, chát a osád s optimalizovanou typografiou."""
-    for lm in LANDMARKS:
+    # 4. PLESÁ A VODNÉ PLOCHY (35 bodov)
+    lakes = [
+        ("Veľké Hincovo pleso", 1945, 7.5, 15.8), ("Štrbské pleso", 1346, 5.8, 9.5),
+        ("Popradské pleso", 1494, 7.2, 12.2), ("Batizovské pleso", 1884, 11.0, 14.5),
+        ("Velické pleso", 1670, 12.4, 12.5), ("Skalnaté pleso", 1751, 18.2, 15.0),
+        ("Zelené pleso Kežmarské", 1551, 19.2, 18.0), ("Veľké Spišské pleso", 2014, 16.0, 17.0),
+        ("Prostredné Spišské pleso", 2013, 16.2, 16.8), ("Nižné Terianske pleso", 1940, 5.0, 16.5),
+        ("Vyšné Terianske pleso", 2109, 5.2, 16.8), ("Vyšné Temnosmrečinské pl.", 1725, 5.4, 17.8),
+        ("Nižné Temnosmrečinské pl.", 1677, 5.1, 17.5), ("Dračie pleso", 2019, 9.2, 14.8),
+        ("Ľadové pleso Zlomiskové", 1925, 9.5, 14.6), ("Kačacie pleso", 1575, 10.6, 17.5),
+        ("Čierne pleso Javorové", 1492, 13.8, 19.2), ("Žabie plesá Mengusovské", 1919, 8.2, 15.2),
+        ("Vyšné Žabie pleso", 2045, 8.4, 15.5), ("Malé Hincovo pleso", 1923, 7.3, 15.6),
+        ("Nižné Wahlenbergovo pleso", 2058, 5.6, 14.8), ("Vyšné Wahlenbergovo pleso", 2157, 5.4, 15.2),
+        ("Capie pleso", 2075, 6.2, 15.5), ("Okrúhle pleso", 2105, 6.0, 15.8),
+        ("Kozie pleso Mlynické", 1811, 6.3, 14.0), ("Pliesko pod Skokom", 1690, 6.4, 13.2),
+        ("Dlhé pleso Velické", 1929, 12.0, 15.0), ("Kvetnicové pliesko", 1812, 12.2, 14.0),
+        ("Pusté pleso", 2056, 13.2, 16.8), ("Starolesnianske pleso", 2000, 14.0, 16.2),
+        ("Sesterské pleso", 1965, 13.9, 16.0), ("Zbojnícke plesá", 1960, 13.6, 16.4),
+        ("Červené pleso", 1810, 19.5, 18.5), ("Belasé pleso", 1862, 19.6, 18.7),
+        ("Trojrohé pleso", 1611, 20.0, 18.2)
+    ]
+    for n, a, x, y in lakes:
+        pts.append({"name": n, "alt": f"{a}m", "x": x, "y": y, "type": "lake", "prio": 3})
+
+    # 5. DOLINY (25 bodov)
+    valleys = [
+        ("Mengusovská dolina", 1600, 7.5, 14.0), ("Zlomisková dolina", 1750, 9.2, 14.0),
+        ("Batizovská dolina", 1700, 11.0, 13.5), ("Velická dolina", 1500, 12.4, 11.5),
+        ("Slavkovská dolina", 1600, 14.0, 12.5), ("Veľká Studená dolina", 1700, 14.5, 15.0),
+        ("Malá Studená dolina", 1800, 16.5, 16.0), ("Skalnatá dolina", 1700, 18.5, 14.5),
+        ("Dolina Kežmarskej Bielej vody", 1300, 20.0, 17.0), ("Dolina Zeleného plesa", 1600, 19.0, 18.0),
+        ("Dolina Siedmich prameňov", 1350, 21.5, 18.5), ("Monkova dolina", 1100, 21.0, 22.5),
+        ("Javorová dolina", 1300, 14.5, 20.0), ("Zadná Javorová dolina", 1700, 14.8, 18.5),
+        ("Bielovodská dolina", 1200, 10.5, 20.0), ("Ťažká dolina", 1700, 9.8, 17.0),
+        ("Kačacia dolina", 1650, 10.5, 17.0), ("Litvorová dolina", 1750, 11.5, 17.5),
+        ("Rovienková dolina", 1800, 12.8, 18.0), ("Svišťová dolina", 1600, 12.5, 18.5),
+        ("Kôprová dolina", 1200, 3.5, 14.0), ("Hlinská dolina", 1600, 5.0, 16.0),
+        ("Temnosmrečinská dolina", 1600, 4.8, 17.2), ("Mlynická dolina", 1600, 6.3, 13.5),
+        ("Furkotská dolina", 1700, 5.5, 14.0)
+    ]
+    for n, a, x, y in valleys:
+        pts.append({"name": n, "alt": f"{a}m", "x": x, "y": y, "type": "valley", "prio": 4})
+
+    # 6. HORSKÉ CHATY (15 bodov)
+    huts = [
+        ("Chata pod Rysmi", 2250, 8.6, 15.9), ("Téryho chata", 2015, 16.2, 16.8),
+        ("Zbojnícka chata", 1960, 13.8, 15.8), ("Chata pod Soliskom", 1840, 6.4, 12.2),
+        ("Skalnatá chata", 1751, 18.2, 15.0), ("Sliezsky dom", 1670, 12.4, 12.6),
+        ("Chata pri Zelenom plese", 1551, 19.2, 18.0), ("Popradské pleso chata", 1494, 7.2, 12.2),
+        ("Chata pri Popradskom plese", 1500, 7.3, 12.3), ("Bilíkova chata", 1255, 15.2, 10.5),
+        ("Rainerova chata", 1301, 15.4, 11.0), ("Zamkovského chata", 1475, 16.5, 13.5),
+        ("Chata Plesnivec", 1290, 21.8, 19.2), ("Chata pod Kriváňom (býv.)", 1950, 4.2, 14.2),
+        ("Chata Kamzík (býv.)", 1295, 15.3, 10.8)
+    ]
+    for n, a, x, y in huts:
+        pts.append({"name": n, "alt": f"{a}m", "x": x, "y": y, "type": "hut", "prio": 2})
+
+    # 7. OSADY A MESTÁ (15 bodov)
+    towns = [
+        ("Starý Smokovec", 1010, 14.2, 7.5), ("Nový Smokovec", 1000, 13.8, 7.3),
+        ("Horný Smokovec", 950, 14.8, 7.8), ("Dolný Smokovec", 890, 14.5, 6.0),
+        ("Tatranská Lomnica", 850, 19.5, 9.0), ("Tatranské Matliare", 885, 20.5, 10.5),
+        ("Tatranská Lesná", 915, 17.5, 7.2), ("Štrbské Pleso", 1346, 5.8, 9.5),
+        ("Tatranská Štrba", 850, 5.0, 4.0), ("Štrba", 829, 4.5, 2.0),
+        ("Tatranská Polianka", 1005, 11.5, 6.8), ("Nová Polianka", 1040, 10.0, 6.0),
+        ("Vyšné Hágy", 1125, 8.5, 6.5), ("Podbanské", 940, 1.5, 11.0),
+        ("Ždiar", 896, 20.5, 22.0), ("Poprad", 672, 20.0, 1.8),
+        ("Veľká Lomnica", 640, 22.0, 5.0), ("Gerlachov", 780, 13.0, 3.5)
+    ]
+    for n, a, x, y in towns:
+        pts.append({"name": n, "alt": f"{a}m", "x": x, "y": y, "type": "town", "prio": 1})
+
+    return pts
+
+ALL_LANDMARKS = build_dense_tatry_points()
+
+def draw_dense_landmarks(ax, is_compact=False, show_all=True):
+    """Vykreslí orientačnú sieť 200+ bodov s vyváženým zobrazením."""
+    for lm in ALL_LANDMARKS:
         ltype = lm["type"]
+        prio = lm["prio"]
         
+        # Voľba štýlu ikony
         if ltype == "peak":
             marker = '^'
-            mcolor = '#ef4444'
-            msize = 6 if is_compact else 8
-            fsize = 6.5 if is_compact else 7.5
-            box_bg = '#1e1b4b'
-            border_c = '#f87171'
+            mcolor = '#ef4444' # Červená
+            msize = 5.5 if is_compact else 7.5
+        elif ltype == "subpeak":
+            marker = '^'
+            mcolor = '#f87171' # Svetločervená
+            msize = 2.5 if is_compact else 4.0
+        elif ltype == "pass":
+            marker = 'x'
+            mcolor = '#fbbf24' # Jantárová
+            msize = 3.0 if is_compact else 5.0
+        elif ltype == "lake":
+            marker = 'o'
+            mcolor = '#38bdf8' # Azúrová
+            msize = 2.5 if is_compact else 4.5
         elif ltype == "hut":
             marker = 's'
-            mcolor = '#fbbf24'
-            msize = 4.5 if is_compact else 6
-            fsize = 5.5 if is_compact else 6.5
-            box_bg = '#451a03'
-            border_c = '#f59e0b'
-        else: # town
+            mcolor = '#f59e0b' # Oranžová
+            msize = 4.0 if is_compact else 6.0
+        elif ltype == "town":
             marker = 'o'
-            mcolor = '#38bdf8'
-            msize = 5 if is_compact else 7
-            fsize = 6 if is_compact else 7
-            box_bg = '#0f172a'
-            border_c = '#38bdf8'
+            mcolor = '#a855f7' # Fialová
+            msize = 4.5 if is_compact else 6.5
+        else: # valley
+            marker = '.'
+            mcolor = '#94a3b8'
+            msize = 2.0 if is_compact else 3.5
 
         ax.plot(lm["x"], lm["y"], marker=marker, markersize=msize, color=mcolor, 
-                markeredgecolor='#ffffff', markeredgewidth=0.8, zorder=12)
-        
-        # Pri 4-panelovom kompaktnom zobrazení vynecháme text chát pre zachovanie prehľadnosti
-        if is_compact and ltype == "hut":
-            continue
+                markeredgecolor='#000000', markeredgewidth=0.5, alpha=0.9, zorder=12)
 
-        label = lm['name'] if is_compact else f"{lm['name']}\n{lm['alt']}"
-        y_offset = 0.35 if is_compact else 0.45
-        
-        ax.text(lm["x"], lm["y"] + y_offset, label,
-                fontsize=fsize, fontweight='bold', color='white', ha='center', va='bottom',
-                bbox=dict(boxstyle='round,pad=0.15', facecolor=box_bg, edgecolor=border_c, alpha=0.85, linewidth=0.6),
-                zorder=13)
+        # Inteligentné popisky (aby sa texty neprekrývali)
+        should_label = False
+        if not is_compact:
+            # V samostatnom veľkom grafe popíšeme prio 1, prio 2 a vybrané jazerá/chaty
+            if prio <= 2 or ltype in ["hut", "town"]:
+                should_label = True
+        else:
+            # V 4-panelovom grafe len hlavné štíty a hlavné obce
+            if prio == 1:
+                should_label = True
+
+        if should_label:
+            fsize = 5.5 if is_compact else 7.0
+            label = lm['name'] if is_compact else f"{lm['name']}\n{lm['alt']}"
+            y_offset = 0.28 if is_compact else 0.38
+            
+            ax.text(lm["x"], lm["y"] + y_offset, label,
+                    fontsize=fsize, fontweight='bold', color='white', ha='center', va='bottom',
+                    bbox=dict(boxstyle='round,pad=0.12', facecolor='#0f172a', edgecolor=mcolor, alpha=0.82, linewidth=0.5),
+                    zorder=13)
 
 # =============================================================================
-# REALISTICKÝ GENERÁTOR MORFOLÓGIE TATIER (DOLINY, RÁZSOCHY, ŠTÍTY)
+# TOPOGRAFIA TATIER SO ZABUDOVANÝMI 200+ STRUKTÚRAMI (DEM)
 # =============================================================================
-def generate_tatry_dem(grid_shape=(140, 140), dx=171.4, dy=171.4):
+def generate_tatry_dem(grid_shape=(160, 160), dx=150.0, dy=150.0):
     nx, ny = grid_shape
     x = np.arange(nx) * dx
     y = np.arange(ny) * dy
     X, Y = np.meshgrid(x, y, indexing='ij')
     
-    # Základný sklon z Popradskej kotliny (600m) na sever
-    dem = 620.0 + (Y * 0.008)
+    dem = 600.0 + (Y * 0.009)
     
-    # Hlavný tatranský hrebeň
+    # Hlavný hrebeň
     ridge_y = 16500.0
-    main_ridge = 1450.0 * np.exp(-((Y - ridge_y)**2) / (2 * 2800.0**2))
-    ridge_waves = 1.0 + 0.18 * np.sin(X / 1600.0) * np.cos(X / 3200.0)
+    main_ridge = 1500.0 * np.exp(-((Y - ridge_y)**2) / (2 * 2600.0**2))
+    ridge_waves = 1.0 + 0.2 * np.sin(X / 1400.0) * np.cos(X / 2800.0)
     dem += main_ridge * ridge_waves
     
-    # Južné rázsochy (Slavkovská, Lomnická, Krivánska rázsocha)
-    spurs = 550.0 * np.exp(-((Y - 13000.0)**2) / (2 * 3000.0**2)) * np.maximum(np.cos(X / 1800.0), 0.0)**2
+    # Rázsochy a bočné chrbty
+    spurs = 600.0 * np.exp(-((Y - 13000.0)**2) / (2 * 3200.0**2)) * np.maximum(np.cos(X / 1700.0), 0.0)**2
     dem += spurs
     
-    # Zárez hlavných dolín (Mengusovská, Velická, Studená, Kôprová)
-    valleys = (
-        np.exp(-((X - 7000.0)**2) / (2 * 700.0**2)) +   # Mengusovská
-        np.exp(-((X - 12000.0)**2) / (2 * 650.0**2)) +  # Velická
-        np.exp(-((X - 15000.0)**2) / (2 * 800.0**2)) +  # Studená dolina
-        np.exp(-((X - 3000.0)**2) / (2 * 900.0**2))     # Kôprová
-    ) * np.exp(-((Y - 13500.0)**2) / (2 * 4000.0**2))
-    dem -= valleys * 450.0
+    # Doliny (zárezy)
+    valley_system = (
+        np.exp(-((X - 3500.0)**2) / (2 * 900.0**2)) +   # Kôprová
+        np.exp(-((X - 5500.0)**2) / (2 * 650.0**2)) +   # Furkotská
+        np.exp(-((X - 6300.0)**2) / (2 * 600.0**2)) +   # Mlynická
+        np.exp(-((X - 7500.0)**2) / (2 * 700.0**2)) +   # Mengusovská
+        np.exp(-((X - 9200.0)**2) / (2 * 550.0**2)) +   # Zlomiská
+        np.exp(-((X - 11000.0)**2) / (2 * 600.0**2)) +  # Batizovská
+        np.exp(-((X - 12400.0)**2) / (2 * 600.0**2)) +  # Velická
+        np.exp(-((X - 14500.0)**2) / (2 * 750.0**2)) +  # Veľká Studená
+        np.exp(-((X - 16500.0)**2) / (2 * 700.0**2)) +  # Malá Studená
+        np.exp(-((X - 18500.0)**2) / (2 * 650.0**2)) +  # Skalnatá
+        np.exp(-((X - 20000.0)**2) / (2 * 800.0**2))    # Kežmarská Biela voda
+    ) * np.exp(-((Y - 13500.0)**2) / (2 * 4200.0**2))
+    dem -= valley_system * 480.0
 
-    # Modelovanie jednotlivých štítov
-    def add_peak(px, py, height, r):
-        return height * np.exp(-((X - px)**2 + (Y - py)**2) / (2 * r**2))
+    # Pridanie výškových kupolí štítov
+    for p in ALL_LANDMARKS:
+        if p["type"] in ["peak", "subpeak"]:
+            alt_num = float(p["alt"].replace("m", ""))
+            if alt_num > 2100:
+                h_peak = (alt_num - 1900.0) * 0.95
+                r_peak = 500.0 if p["type"] == "peak" else 320.0
+                dem += h_peak * np.exp(-((X - p["x"]*1000.0)**2 + (Y - p["y"]*1000.0)**2) / (2 * r_peak**2))
 
-    dem += add_peak(12000.0, 16200.0, 750.0, 750.0)  # Gerlach (2655m)
-    dem += add_peak(18000.0, 16800.0, 720.0, 700.0)  # Lomnický (2634m)
-    dem += add_peak(4000.0, 15000.0, 680.0, 850.0)   # Kriváň (2495m)
-    dem += add_peak(8500.0, 16000.0, 640.0, 650.0)   # Rysy (2501m)
-    dem += add_peak(14500.0, 14000.0, 520.0, 600.0)  # Slavkovský štít
-    dem += add_peak(20000.0, 19500.0, 480.0, 650.0)  # Jahňací štít
-    dem += add_peak(6800.0, 16500.0, 560.0, 550.0)   # Kôprovský štít
-
-    # Hladký prechod do Popradskej kotliny (bez skokových hrán)
-    basin_weight = 1.0 / (1.0 + np.exp((Y - 6500.0) / 1000.0))
-    dem = dem * (1.0 - basin_weight) + (640.0 + Y * 0.003) * basin_weight
-    
-    dem = ndimage.gaussian_filter(dem, sigma=1.2)
+    # Plynulý prechod do kotliny
+    basin_weight = 1.0 / (1.0 + np.exp((Y - 6500.0) / 900.0))
+    dem = dem * (1.0 - basin_weight) + (630.0 + Y * 0.003) * basin_weight
+    dem = ndimage.gaussian_filter(dem, sigma=1.0)
     return X, Y, dem, dx, dy
 
 X, Y, DEM, DX, DY = generate_tatry_dem()
 
 # =============================================================================
-# NUMERICKÝ ENGINE PRE 48H HORIZONT (9 KROKOV PO 6H)
+# NUMERICKÝ ENGINE PRE 48H HORIZONT
 # =============================================================================
 def simulate_forecast_step(step_idx: int):
     hours_ahead = step_idx * 6
     
-    # Synoptický vývoj vetra a frontu
-    wind_base_speed = 11.0 + 4.5 * np.sin(step_idx * 0.7)
+    wind_base_speed = 11.5 + 4.5 * np.sin(step_idx * 0.7)
     wind_angle_deg = -50.0 + 15.0 * np.cos(step_idx * 0.5)
     rad = np.radians(wind_angle_deg)
     
@@ -176,7 +320,6 @@ def simulate_forecast_step(step_idx: int):
     t_synoptic = -2.5 - (step_idx * 0.5) + 1.5 * np.sin(X / 10000.0)
     t_bg = t_synoptic - ((DEM - 700.0) * 0.0065)
     
-    # Nočná inverzia
     is_night = (step_idx % 4) in [1, 2]
     inv_strength = 6.0 if is_night else 1.5
     temp_field = t_bg.copy()
@@ -187,14 +330,12 @@ def simulate_forecast_step(step_idx: int):
     slope = np.sqrt(dh_dx**2 + dh_dy**2)
     aspect = np.arctan2(-dh_dx, dh_dy)
     
-    # Speed-up na hrebeňoch
     dem_base = ndimage.gaussian_filter(DEM, sigma=16)
     h_rel = np.maximum(DEM - dem_base, 0.0)
     delta_S = (1.6 * h_rel / 3500.0) * np.exp(-30.0 / 3500.0)
     u_speed = u_bg * (1.0 + delta_S)
     v_speed = v_bg * (1.0 + delta_S)
     
-    # Stáčanie v dolinách
     speed_init = np.sqrt(u_speed**2 + v_speed**2)
     wind_dir = np.arctan2(v_speed, u_speed)
     delta_theta = np.clip(-0.25 * (slope * 100.0) * np.sin(2.0 * (aspect - wind_dir)), -0.35, 0.35)
@@ -202,7 +343,6 @@ def simulate_forecast_step(step_idx: int):
     u_steered = speed_init * np.cos(steered_dir)
     v_steered = speed_init * np.sin(steered_dir)
     
-    # Bóra
     downslope = u_steered * dh_dx + v_steered * dh_dy
     bora_mask = (downslope < -0.08) & (DEM > 750.0)
     fall_h = np.maximum(2100.0 - DEM, 0.0)
@@ -215,7 +355,7 @@ def simulate_forecast_step(step_idx: int):
     u_bora[bora_mask] += (u_steered[bora_mask] / spd[bora_mask]) * acc[bora_mask]
     v_bora[bora_mask] += (v_steered[bora_mask] / spd[bora_mask]) * acc[bora_mask]
     
-    # MASCON SOR Solver
+    # MASCON Solver
     nx, ny = DEM.shape
     lam = np.zeros((nx, ny))
     du_dx = np.zeros_like(u_bora)
@@ -226,7 +366,7 @@ def simulate_forecast_step(step_idx: int):
     omega = 1.65
     dx2, dy2 = DX**2, DY**2
     denom = 2.0 * (1.0/dx2 + 1.0/dy2)
-    for _ in range(60):
+    for _ in range(50):
         lam_old = lam.copy()
         for i in range(1, nx-1):
             for j in range(1, ny-1):
@@ -243,7 +383,6 @@ def simulate_forecast_step(step_idx: int):
     v_opt = v_bora + 0.5 * dlam_dy
     w_opt = u_opt * dh_dx + v_opt * dh_dy
     
-    # Zrážky: Seeder-Feeder & Drift
     synoptic_precip = np.maximum(2.2 + 2.8 * np.sin((step_idx + 1) * 0.75) + 1.2 * np.sin(X / 5000.0), 0.2)
     p_sf = synoptic_precip.copy()
     p_sf[w_opt > 0.0] *= (1.0 + 0.4 * w_opt[w_opt > 0.0])
@@ -252,7 +391,6 @@ def simulate_forecast_step(step_idx: int):
     p_drift = np.roll(np.roll(p_sf, shift_x, axis=0), shift_y, axis=1)
     p_final = np.maximum(p_drift * np.where(w_opt < 0.0, np.exp(0.3 * w_opt), 1.0), 0.0)
     
-    # Sneh & Prevejovanie (s korektným ohraničením okrajov)
     snow_mask = temp_field < 0.0
     fresh_snow_rate = np.zeros_like(p_final)
     fresh_snow_rate[snow_mask] = p_final[snow_mask]
@@ -269,13 +407,11 @@ def simulate_forecast_step(step_idx: int):
     dqx[1:-1, :] = (qx[2:, :] - qx[:-2, :]) / (2.0 * DX)
     dqy[:, 1:-1] = (qy[:, 2:] - qy[:, :-2]) / (2.0 * DY)
     
-    # Vynulovanie okrajových šumov
     dqx[0, :] = dqx[-1, :] = dqy[:, 0] = dqy[:, -1] = 0.0
     snow_redist = -(dqx + dqy) * (6.0 * 3600.0) / (100.0 * 0.01)
     snow_redist = np.clip(snow_redist, -25.0, 35.0)
     snow_diff = np.where(snow_mask, (fresh_snow_rate * 6.0) + snow_redist, 0.0)
     
-    # LHI
     exposure = np.exp((DEM - 650.0) / 600.0) * (1.0 + 1.8 * slope)
     instability = np.maximum(w_opt, 0.0) * 1.2
     temp_factor = np.zeros_like(temp_field)
@@ -293,25 +429,32 @@ def simulate_forecast_step(step_idx: int):
 FORECAST_TIMELINE = [simulate_forecast_step(i) for i in range(9)]
 
 # =============================================================================
-# FASTAPI ENDPOINTY
+# ENDPOINTY
 # =============================================================================
 @app.get("/")
 def read_root():
-    return {"status": "ok", "service": "TATRYS-50 v2 HD Engine", "landmarks_count": len(LANDMARKS)}
+    return {"status": "ok", "service": "TATRYS-50 v2 Ultra-HD", "landmarks_total": len(ALL_LANDMARKS)}
 
 @app.get("/health")
 def health_check():
     return {"status": "healthy", "service": "tatry-meteo-api"}
+
+@app.get("/api/landmarks")
+def get_landmarks():
+    """Vráti kompletnú sieť 200+ bodov pre interaktívnu Leaflet mapu."""
+    return {"status": "ok", "total": len(ALL_LANDMARKS), "landmarks": ALL_LANDMARKS}
 
 @app.get("/api/forecast")
 @app.get("/api/stations")
 def get_forecast(step: int = Query(0, ge=0, le=8)):
     d = FORECAST_TIMELINE[step]
     
-    # Vybrané body pre zobrazenie v kartách
+    # 8 hlavných monitorovacích bodov
     locs = [
         {"name": "Lomnický štít (2 634 m)", "x": 18.0, "y": 16.8},
         {"name": "Gerlachovský štít (2 655 m)", "x": 12.0, "y": 16.2},
+        {"name": "Kriváň (2 495 m)", "x": 4.0, "y": 15.0},
+        {"name": "Téryho chata (2 015 m)", "x": 16.2, "y": 16.8},
         {"name": "Zbojnícka chata (1 960 m)", "x": 13.8, "y": 15.8},
         {"name": "Štrbské Pleso (1 346 m)", "x": 5.8, "y": 9.5},
         {"name": "Starý Smokovec (1 010 m)", "x": 14.2, "y": 7.5},
@@ -344,13 +487,13 @@ def render_map(layer: str = Query("all"), step: int = Query(0, ge=0, le=8)):
     h_label = f"+{d['hours']}h"
     
     if layer == "all":
-        fig, axs = plt.subplots(2, 2, figsize=(17, 14), facecolor='#0f172a')
+        fig, axs = plt.subplots(2, 2, figsize=(18, 15), facecolor='#0f172a')
         for row in axs:
             for ax in row:
                 ax.set_facecolor('#1e293b')
                 ax.tick_params(colors='#94a3b8')
-                ax.set_xlabel('Západ -> Východ (km)', color='#94a3b8', fontsize=8.5)
-                ax.set_ylabel('Juh -> Sever (km)', color='#94a3b8', fontsize=8.5)
+                ax.set_xlabel('Západ -> Východ (km)', color='#94a3b8', fontsize=8)
+                ax.set_ylabel('Juh -> Sever (km)', color='#94a3b8', fontsize=8)
                 for s in ax.spines.values():
                     s.set_color('#334155')
 
@@ -358,10 +501,10 @@ def render_map(layer: str = Query("all"), step: int = Query(0, ge=0, le=8)):
         im1 = axs[0, 0].contourf(X_km, Y_km, DEM, levels=30, cmap='terrain', alpha=0.85)
         cb1 = fig.colorbar(im1, ax=axs[0, 0])
         plt.setp(plt.getp(cb1.ax.axes, 'yticklabels'), color='white')
-        axs[0, 0].quiver(X_km[::7, ::7], Y_km[::7, ::7], d['u_opt'][::7, ::7], d['v_opt'][::7, ::7], scale=130, color='black', width=0.0022)
+        axs[0, 0].quiver(X_km[::8, ::8], Y_km[::8, ::8], d['u_opt'][::8, ::8], d['v_opt'][::8, ::8], scale=130, color='black', width=0.002)
         if d['acc'].max() > 1.0:
-            axs[0, 0].contour(X_km, Y_km, d['acc'], levels=[3.0, 6.0, 9.0], colors='#ef4444', linewidths=1.3, linestyles='--')
-        draw_landmarks_on_axis(axs[0, 0], is_compact=True)
+            axs[0, 0].contour(X_km, Y_km, d['acc'], levels=[3.0, 6.0, 9.0], colors='#ef4444', linewidths=1.2, linestyles='--')
+        draw_dense_landmarks(axs[0, 0], is_compact=True)
         axs[0, 0].set_title(f'A. Topografia Tatier & Vietor [{h_label}]', color='white', fontweight='bold', fontsize=11)
 
         # 2. Zrážky
@@ -370,7 +513,7 @@ def render_map(layer: str = Query("all"), step: int = Query(0, ge=0, le=8)):
         plt.setp(plt.getp(cb2.ax.axes, 'yticklabels'), color='white')
         cb2.ax.yaxis.label.set_color('white')
         axs[0, 1].contour(X_km, Y_km, DEM, levels=[1000, 1500, 2000, 2500], colors='#64748b', linewidths=0.5, alpha=0.5)
-        draw_landmarks_on_axis(axs[0, 1], is_compact=True)
+        draw_dense_landmarks(axs[0, 1], is_compact=True)
         axs[0, 1].set_title(f'B. Intenzita zrážok (Seeder-Feeder) [{h_label}]', color='white', fontweight='bold', fontsize=11)
 
         # 3. Sneh
@@ -380,7 +523,7 @@ def render_map(layer: str = Query("all"), step: int = Query(0, ge=0, le=8)):
         plt.setp(plt.getp(cb3.ax.axes, 'yticklabels'), color='white')
         cb3.ax.yaxis.label.set_color('white')
         axs[1, 0].contour(X_km, Y_km, DEM, levels=[1000, 1500, 2000, 2500], colors='#64748b', linewidths=0.5, alpha=0.5)
-        draw_landmarks_on_axis(axs[1, 0], is_compact=True)
+        draw_dense_landmarks(axs[1, 0], is_compact=True)
         axs[1, 0].set_title(f'C. Prevejovanie snehu za 6h [{h_label}]', color='white', fontweight='bold', fontsize=11)
 
         # 4. Blesky & Inverzia
@@ -389,12 +532,12 @@ def render_map(layer: str = Query("all"), step: int = Query(0, ge=0, le=8)):
         plt.setp(plt.getp(cb4.ax.axes, 'yticklabels'), color='white')
         cb4.ax.yaxis.label.set_color('white')
         axs[1, 1].contour(X_km, Y_km, d['temp_field'], levels=[-6.0, -3.0, 0.0], colors='#38bdf8', linewidths=1.2, linestyles='-.')
-        draw_landmarks_on_axis(axs[1, 1], is_compact=True)
+        draw_dense_landmarks(axs[1, 1], is_compact=True)
         axs[1, 1].set_title(f'D. Riziko bleskov & Teplotné pole [{h_label}]', color='white', fontweight='bold', fontsize=11)
 
         fig.tight_layout()
     else:
-        fig, ax = plt.subplots(figsize=(11, 9), facecolor='#0f172a')
+        fig, ax = plt.subplots(figsize=(12, 10), facecolor='#0f172a')
         ax.set_facecolor('#1e293b')
         ax.tick_params(colors='#94a3b8')
         ax.set_xlabel('Západ -> Východ (km)', color='#94a3b8', fontsize=10)
@@ -402,34 +545,34 @@ def render_map(layer: str = Query("all"), step: int = Query(0, ge=0, le=8)):
 
         if layer == "wind":
             im = ax.contourf(X_km, Y_km, DEM, levels=30, cmap='terrain', alpha=0.85)
-            ax.quiver(X_km[::5, ::5], Y_km[::5, ::5], d['u_opt'][::5, ::5], d['v_opt'][::5, ::5], scale=120, color='black', width=0.0028)
+            ax.quiver(X_km[::6, ::6], Y_km[::6, ::6], d['u_opt'][::6, ::6], d['v_opt'][::6, ::6], scale=120, color='black', width=0.0025)
             if d['acc'].max() > 1.0:
                 ax.contour(X_km, Y_km, d['acc'], levels=[3.0, 6.0, 9.0], colors='#ef4444', linewidths=1.5, linestyles='--')
             cb = fig.colorbar(im, ax=ax, label='Nadmorská výška (m n.m.)')
-            ax.set_title(f'Prúdenie vetra & Tatranská Bóra (200m DEM) [{h_label}]', color='white', fontweight='bold', fontsize=13)
+            ax.set_title(f'Prúdenie vetra & Bóra (200+ bodov) [{h_label}]', color='white', fontweight='bold', fontsize=13)
         elif layer == "precip":
             im = ax.contourf(X_km, Y_km, d['p_final'], levels=25, cmap='YlGnBu')
             ax.contour(X_km, Y_km, DEM, levels=[1000, 1500, 2000, 2500], colors='#64748b', linewidths=0.6, alpha=0.6)
             cb = fig.colorbar(im, ax=ax, label='Intenzita zrážok (mm / h)')
-            ax.set_title(f'Lokálne zrážky (Seeder-Feeder efekt) [{h_label}]', color='white', fontweight='bold', fontsize=13)
+            ax.set_title(f'Lokálne orografické zrážky [{h_label}]', color='white', fontweight='bold', fontsize=13)
         elif layer == "snow":
             m_diff = max(np.max(np.abs(d['snow_diff'])), 1.0)
             im = ax.contourf(X_km, Y_km, d['snow_diff'], levels=25, cmap='RdBu', vmin=-m_diff, vmax=m_diff)
             ax.contour(X_km, Y_km, DEM, levels=[1000, 1500, 2000, 2500], colors='#64748b', linewidths=0.6, alpha=0.6)
             cb = fig.colorbar(im, ax=ax, label='Zmena výšky snehu (cm / 6h)')
-            ax.set_title(f'Prevejovanie snehu a akumulácia v žľaboch [{h_label}]', color='white', fontweight='bold', fontsize=13)
+            ax.set_title(f'Redistribúcia a akumulácia snehu za 6h [{h_label}]', color='white', fontweight='bold', fontsize=13)
         elif layer == "lightning":
             im = ax.contourf(X_km, Y_km, d['lhi'], levels=25, cmap='YlOrRd')
             ax.contour(X_km, Y_km, d['temp_field'], levels=[-6.0, -3.0, 0.0], colors='#38bdf8', linewidths=1.2, linestyles='-.')
             cb = fig.colorbar(im, ax=ax, label='LHI Index (0-100)')
-            ax.set_title(f'Index nebezpečenstva bleskov (LHI) & Teplota [{h_label}]', color='white', fontweight='bold', fontsize=13)
+            ax.set_title(f'Index nebezpečenstva bleskov & Teplota [{h_label}]', color='white', fontweight='bold', fontsize=13)
 
-        draw_landmarks_on_axis(ax, is_compact=False)
+        draw_dense_landmarks(ax, is_compact=False)
         plt.setp(plt.getp(cb.ax.axes, 'yticklabels'), color='white')
         cb.ax.yaxis.label.set_color('white')
 
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.savefig(buf, format='png', dpi=140, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close(fig)
     buf.seek(0)
     return Response(content=buf.getvalue(), media_type="image/png")
