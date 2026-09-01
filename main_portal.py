@@ -3,67 +3,18 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 import json
 from datetime import datetime
-from flask import jsonify
 import xarray as xr
 import cfgrib
-import requests
 import os
+import feedparser
 
-app = FastAPI()
-
-# Dôležité: Povolíme CORS, aby web (frontend) mohol posielať požiadavky na tento server
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Pre produkciu vieš neskôr obmedziť na svoju doménu
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.get("/api/climate-charts")
-def get_climate_charts():
-    # Tu neskôr napojíš dáta zo spracovania GRIB súborov
-    return {
-        "labels": ["Okt", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr"],
-        "vortex_values": [16, 28, 36, 22, 12, None, None]
-    }
-
-# Príklad funkcie na stiahnutie a spracovanie GRIB dát (napr. GFS 850hPa teplota)
-def get_grib_temperature_data():
-    # URL na najnovší GFS súbor (alebo NOAA Open Data)
-    # Pre reálne nasadenie sa často používa Open-Meteo API pre rýchly cache, 
-    # alebo priame sťahovanie GRIB cez NOAA NOMADS server.
-    
-    # Súbor uložíme na Renderi do dočasného úložiska /tmp
-    grib_path = "/tmp/gfs_data.grib"
-    
-    # Ukážka parsovania pomocou xarray + cfgrib:
-    try:
-        # ds = xr.open_dataset(grib_path, engine='cfgrib')
-        # tu vieš vyfiltrovať konkrétnu hladinu (naps. isobaricInhPa = 850)
-        # temperature_850 = ds.t.sel(isobaricInhPa=850)
-        
-        # Zatiaľ vrátime štruktúrovaný JSON, ktorý pošleme cez API endpoint
-        return {"status": "success", "message": "GRIB dáta spracované"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-@app.route('/api/enso-index')
-def get_enso_index():
-    # Tu môžeš buď parsovať reálne dáta z NOAA, alebo vracať aktuálnu hodnotu
-    # Napríklad aktuálna fáza El Niño s kladnou anomáliou:
-    return jsonify({
-        "value": "+0.9 °C",
-        "phase": "El Niño"
-    })
-
-# Inicializácia aplikácie
+# Inicializácia aplikácie (iba raz!)
 app = FastAPI(title="Meteoportal Backend API")
 
-# POVOLIŤ CORS (Kľúčové pre komunikáciu s tvojím frontendom)
+# Povolenie CORS pre komunikáciu s frontendom
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # V produkcii na Renderi to môžeš nechať na "*", alebo pridať svoju doménu
+    allow_origins=["*"],  # V produkcii môžeš obmedziť na svoju doménu
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,6 +23,21 @@ app.add_middleware(
 @app.get("/")
 def read_root():
     return {"status": "Meteoportal Backend je online", "time_utc": datetime.utcnow().isoformat()}
+
+@app.get("/api/climate-charts")
+def get_climate_charts():
+    return {
+        "labels": ["Okt", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr"],
+        "vortex_values": [16, 28, 36, 22, 12, None, None]
+    }
+
+@app.get("/api/enso-index")
+def get_enso_index():
+    # FastAPI vracia priamo slovník (žiadny jsonify)
+    return {
+        "value": "+0.9 °C",
+        "phase": "El Niño"
+    }
 
 @app.get("/api/nao-index")
 def get_nao_index():
@@ -83,7 +49,6 @@ def get_nao_index():
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         
-        # Rozdelíme text na riadky, zoberieme posledný (najnovší)
         lines = response.text.strip().split('\n')
         latest_line = lines[-1].split()
         
@@ -107,7 +72,6 @@ def get_space_weather():
         response.raise_for_status()
         data = response.json()
         
-        # data[-1] je posledný záznam, [1] je hodnota Kp-indexu
         latest_data = data[-1]
         kp_value = float(latest_data[1])
         
@@ -118,10 +82,8 @@ def get_space_weather():
         }
     except Exception as e:
         return {"error": str(e)}
-import feedparser
-from flask import jsonify
 
-@app.route('/api/news', methods=['GET'])
+@app.get("/api/news")
 def get_meteorological_news():
     feeds = [
         {"name": "SWE", "url": "https://www.severe-weather.eu/feed/"},
@@ -132,25 +94,23 @@ def get_meteorological_news():
     all_articles = []
     
     for feed_info in feeds:
-        parsed = feedparser.parse(feed_info["url"])
-        for entry in parsed.entries[:4]: # Zoberieme 4 najnovšie z každého
-            all_articles.append({
-                "sourceName": feed_info["name"],
-                "title": entry.get("title", "Bez názvu"),
-                "date": entry.get("published", "Aktualizované"),
-                "description": entry.get("summary", "")[:100] + "...",
-                "link": entry.get("link", "#")
-            })
+        try:
+            parsed = feedparser.parse(feed_info["url"])
+            for entry in parsed.entries[:4]: # Zoberieme 4 najnovšie z každého
+                all_articles.append({
+                    "sourceName": feed_info["name"],
+                    "title": entry.get("title", "Bez názvu"),
+                    "date": entry.get("published", "Aktualizované"),
+                    "description": entry.get("summary", "")[:100] + "...",
+                    "link": entry.get("link", "#")
+                })
+        except Exception as e:
+            print(f"Chyba pri parsovaní feedu {feed_info['name']}: {e}")
             
-    return jsonify(all_articles)
+    return all_articles
 
 @app.get("/api/model-gfs/local")
 def get_gfs_local():
-    """
-    UKÁŽKOVÝ ENDPOINT PRE GRIB.
-    Tu by Python cez knižnicu xarray stiahol výrez GFS modelu, 
-    vyfiltroval súradnice a vrátil hodnoty.
-    """
     return {
         "model": "NOAA GFS 0.25",
         "location": {"lat": 49.14, "lon": 20.22},
