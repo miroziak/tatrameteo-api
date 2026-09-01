@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.3.6"
+    version="4.2.7"
 )
 
 app.add_middleware(
@@ -196,7 +196,7 @@ def fetch_35_nodes_dwd():
     )
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheTatry-35NodeGrid/4.3'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheTatry-35NodeGrid/4.2'})
         with urllib.request.urlopen(req, timeout=12) as response:
             data = json.loads(response.read().decode())
             CACHE["matrix"] = data
@@ -207,8 +207,11 @@ def fetch_35_nodes_dwd():
         return None
 
 def calculate_35_node_grid_state(step_idx: int):
-    # step_idx je teraz 6-hodinový krok (0 až 8, čo kryje 48 hodín)
     hours_ahead = step_idx * 6
+    tz_sk = datetime.timezone(datetime.timedelta(hours=2))
+    now_sk = datetime.datetime.now(tz_sk)
+    target_dt = now_sk + datetime.timedelta(hours=hours_ahead)
+    
     dwd_raw = fetch_35_nodes_dwd()
 
     dwd_t = np.zeros((7, 5))
@@ -220,9 +223,11 @@ def calculate_35_node_grid_state(step_idx: int):
 
     if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
         time_list = dwd_raw[0].get("hourly", {}).get("time", [])
-        
-        # Prepočet 6-hodinového kroku na hodinový index v poli Open-Meteo
-        data_idx = min(max(0, step_idx * 6), len(time_list) - 1)
+        target_iso_prefix = target_dt.strftime("%Y-%m-%dT%H:00")
+        try:
+            data_idx = time_list.index(target_iso_prefix)
+        except (ValueError, IndexError):
+            data_idx = min(target_dt.hour + (target_dt.day - now_sk.day) * 24, len(time_list) - 1)
 
         idx = 0
         for j in range(5):
@@ -445,70 +450,13 @@ def get_text_forecast(step: int = Query(0, ge=0, le=8)):
 def read_root():
     return {"status": "ok", "service": "TATRYS-50 35-Node Point Grid", "dwd_nodes": 35, "tatras_points": len(TATRAS_POINTS)}
 
-@app.get("/api/text-summary")
-def get_text_summary(step: int = Query(0, ge=0, le=8)):
-    grid_data = calculate_35_node_grid_state(step)
-    priority_points = [p for p in grid_data["points"] if p.get("prio") == 1]
-    
-    return {
-        "status": "ok",
-        "step": step,
-        "hours_ahead": grid_data["hours_ahead"],
-        "timestamp": datetime.datetime.now().strftime("%d.%m. %H:%M"),
-        "count": len(priority_points),
-        "items": priority_points
-    }    
-
-@app.get("/api/lomnicky-station")
-def get_lomnicky_station_data():
-    url = "https://mesonet.agron.iastate.edu/api/json/current.py?station=11953&network=SK_ASOS"
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheSynopFetcher/1.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            payload = json.loads(response.read().decode())
-            obs = payload.get("data", {})
-            
-            if obs:
-                temp_c = round(float(obs.get("tmpc", 0.0)), 1) if obs.get("tmpc") is not None else 0.0
-                wind_kts = float(obs.get("sknt", 0.0))
-                wind_kmh = round(wind_kts * 1.852, 1)
-                humidity = round(float(obs.get("relh", 0.0)), 1) if obs.get("relh") is not None else 0.0
-                valid_time = obs.get("valid", datetime.datetime.now().strftime("%d.%m. %H:00"))
-
-                return {
-                    "station_name": "Lomnický štít (SHMÚ / 2634 m n.m.)",
-                    "station_id": "11953",
-                    "timestamp_str": str(valid_time),
-                    "real_temp": temp_c,
-                    "real_wind_kmh": wind_kmh,
-                    "real_wind_dir": str(obs.get("drct", "--")),
-                    "real_humidity": humidity,
-                    "status": "Online (Live SYNOP)"
-                }
-    except Exception as e:
-        print(f"[VAROVANIE] Sťahovanie reálneho SYNOP zlyhalo: {e}")
-
-    return {
-        "station_name": "Lomnický štít (SHMÚ / 2634 m n.m.)",
-        "station_id": "11953",
-        "timestamp_str": datetime.datetime.now().strftime("%d.%m. %H:00"),
-        "real_temp": 4.5,
-        "real_wind_kmh": 22.0,
-        "real_wind_dir": "SZ",
-        "real_humidity": 70.0,
-        "status": "Offline (Fallback odhad)"
-    }
-
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
 
 @app.get("/api/points-grid")
-def get_points_grid(step: int = Query(0, ge=0, le=8)):
-    return calculate_35_node_grid_state(step)
-
 @app.get("/api/forecast")
-def get_forecast_legacy(step: int = Query(0, ge=0, le=8)):
+def get_points_grid(step: int = Query(0, ge=0, le=8)):
     return calculate_35_node_grid_state(step)
 
 @app.get("/api/hazards")
@@ -516,7 +464,7 @@ def get_hazards_48h():
     hazards = []
     base_dt = datetime.datetime.now()
 
-    for step in range(0, 9):
+    for step in range(9):
         data = calculate_35_node_grid_state(step)
         target_time = base_dt + datetime.timedelta(hours=data["hours_ahead"])
         time_str = target_time.strftime("%d.%m. %H:%M") + f" (+{data['hours_ahead']}h)"
