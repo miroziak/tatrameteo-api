@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.3.4"
+    version="4.3.5"
 )
 
 app.add_middleware(
@@ -217,39 +217,40 @@ def calculate_35_node_grid_state(step_idx: int):
     dwd_cape = np.zeros((7, 5))
     dwd_dem = np.zeros((7, 5))
 
-    if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
+    if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) > 0:
         time_list = dwd_raw[0].get("hourly", {}).get("time", [])
         
-        base_idx = 0
-        current_iso = datetime.datetime.now().strftime("%Y-%m-%dT%H:00")
-        for idx, t_val in enumerate(time_list):
-            if current_iso in t_val:
-                base_idx = idx
-                break
+        # DEBUG LOG: Pozrieme sa v logoch Renderu, aký step prišiel
+        print(f"[BACKEND-DEBUG] Prijatý step_idx: {step_idx}, Celkovo časov v poli: {len(time_list)}")
 
-        # Kľúčové: pripočítavame step_idx priamo k bázovému indexu
-        data_idx = min(max(0, base_idx + step_idx), len(time_list) - 1)
+        # Priamy index pre hodinový krok bezpečne ohraničený dĺžkou poľa
+        data_idx = min(max(0, step_idx), len(time_list) - 1)
 
         idx = 0
         for j in range(5):
             for i in range(7):
-                n = dwd_raw[idx].get("hourly", {})
-                
-                temps = n.get("temperature_2m", [16.0])
-                winds = n.get("wind_speed_10m", [15.0])
-                dirs = n.get("wind_direction_10m", [315.0])
-                precs = n.get("precipitation", [0.0])
-                capes = n.get("cape", [0.0])
+                if idx < len(dwd_raw):
+                    n = dwd_raw[idx].get("hourly", {})
+                    temps = n.get("temperature_2m", [16.0])
+                    winds = n.get("wind_speed_10m", [15.0])
+                    dirs = n.get("wind_direction_10m", [315.0])
+                    precs = n.get("precipitation", [0.0])
+                    capes = n.get("cape", [0.0])
 
-                dwd_t[i, j] = temps[data_idx] if len(temps) > data_idx else temps[-1]
-                dwd_wspd[i, j] = (winds[data_idx] if len(winds) > data_idx else winds[-1]) / 3.6
-                dwd_wdir[i, j] = dirs[data_idx] if len(dirs) > data_idx else dirs[-1]
-                dwd_prec[i, j] = precs[data_idx] if len(precs) > data_idx else precs[-1]
-                dwd_cape[i, j] = capes[data_idx] if len(capes) > data_idx else capes[-1]
-                
-                dwd_dem[i, j] = dwd_raw[idx].get("elevation", 1200.0)
+                    # DEBUG LOG pre prvý uzol (idx 0)
+                    if idx == 0:
+                        print(f"[BACKEND-DEBUG] Uzol 0 | data_idx: {data_idx} | Čas v API: {time_list[data_idx] if len(time_list) > data_idx else 'N/A'} | Teplota v API: {temps[data_idx] if len(temps) > data_idx else 'N/A'}")
+
+                    dwd_t[i, j] = temps[data_idx] if len(temps) > data_idx else 16.0
+                    dwd_wspd[i, j] = (winds[data_idx] if len(winds) > data_idx else 4.0) / 3.6
+                    dwd_wdir[i, j] = dirs[data_idx] if len(dirs) > data_idx else 315.0
+                    dwd_prec[i, j] = precs[data_idx] if len(precs) > data_idx else 0.0
+                    dwd_cape[i, j] = capes[data_idx] if len(capes) > data_idx else 0.0
+                    
+                    dwd_dem[i, j] = dwd_raw[idx].get("elevation", 1200.0)
                 idx += 1
     else:
+        print("[BACKEND-DEBUG] CHYBA: dwd_raw nie je platný zoznam alebo je prázdny!")
         for j in range(5):
             for i in range(7):
                 dwd_dem[i, j] = 900.0 + j * 150.0
@@ -437,7 +438,7 @@ def get_text_forecast(step: int = Query(0, ge=0, le=48)):
         f"Prehľad predpovede pre Vysoké Tatry na horizont +{hours} hodín. "
         f"Teploty v najvyšších polohách sa pohybujú okolo {min_temp['temp']} °C "
         f"(lokalita {min_temp['name']}, {min_temp['alt']} m n.m.). "
-        f"Najsilnejший vietor dosahuje rýchlosť do {max_wind['wind_kmh']} km/h "
+        f"Najsilnejší vietor dosahuje rýchlosť do {max_wind['wind_kmh']} km/h "
         f"na vrchole {max_wind['name']}. "
     )
     
