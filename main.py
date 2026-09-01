@@ -414,7 +414,20 @@ def fetch_sounding_ganovce():
 @app.get("/")
 def read_root():
     return {"status": "ok", "service": "TATRYS-50 35-Node Point Grid", "dwd_nodes": 35, "tatras_points": len(TATRAS_POINTS)}
+@app.get("/api/text-summary")
+def get_text_summary(step: int = Query(0, ge=0, le=8)):
+    # Využijeme existujúci výpočet mriežky, ale vyfiltrujeme len kľúčové body (prio == 1)
+    grid_data = calculate_35_node_grid_state(step)
+    priority_points = [p for p in grid_data["points"] if p.get("prio") == 1]
     
+    return {
+        "status": "ok",
+        "step": step,
+        "hours_ahead": grid_data["hours_ahead"],
+        "timestamp": datetime.datetime.now().strftime("%d.%m. %H:%M"),
+        "count": len(priority_points),
+        "items": priority_points
+    }    
 @app.get("/api/lomnicky-station")
 def get_lomnicky_station_data():
     # Iowa State University mesonet SYNOP API pre stanicu Lomnický štít (WMO 11953)
