@@ -417,17 +417,50 @@ def read_root():
     
 @app.get("/api/lomnicky-station")
 def get_lomnicky_station_data():
-    # Tu môžete neskôr napojiť reálny skraper SHMÚ alebo SYNOP hlásenie pre Lomnický štít (WMO 11953)
-    # Teraz vrácame reálnu štruktúru pre porovnanie s modelom
+    # Iowa State University mesonet SYNOP API pre stanicu Lomnický štít (WMO 11953)
+    url = "https://mesonet.agron.iastate.edu/api/json/current.py?station=11953&network=SK_ASOS"
+    
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheSynopFetcher/1.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            payload = json.loads(response.read().decode())
+            obs = payload.get("data", {})
+            
+            if obs:
+                # Získame reálne dáta priamo zo SYNOP hlásenia
+                temp_c = obs.get("tmpf") # často v F alebo C podľa API, tu ošetríme štandard
+                # Poznámka: Ak API vracia reálne hodnoty, spracujeme ich:
+                temp_c = round(float(obs.get("tmpc", 0.0)), 1) if obs.get("tmpc") is not None else 0.0
+                wind_kts = float(obs.get("sknt", 0.0))
+                wind_kmh = round(wind_kts * 1.852, 1) # prevod uzlov na km/h
+                humidity = round(float(obs.get("relh", 0.0)), 1) if obs.get("relh") is not None else 0.0
+                
+                # Čas merania
+                valid_time = obs.get("valid", datetime.datetime.now().strftime("%d.%m. %H:00"))
+
+                return {
+                    "station_name": "Lomnický štít (SHMÚ / 2634 m n.m.)",
+                    "station_id": "11953",
+                    "timestamp_str": str(valid_time),
+                    "real_temp": temp_c,
+                    "real_wind_kmh": wind_kmh,
+                    "real_wind_dir": str(obs.get("drct", "--")),
+                    "real_humidity": humidity,
+                    "status": "Online (Live SYNOP)"
+                }
+    except Exception as e:
+        print(f"[VAROVANIE] Sťahovanie reálneho SYNOP zlyhalo: {e}")
+
+    # Fallback, ak by externá služba nedostupná (prepojené s aktuálnym modelom/odhadom)
     return {
         "station_name": "Lomnický štít (SHMÚ / 2634 m n.m.)",
         "station_id": "11953",
         "timestamp_str": datetime.datetime.now().strftime("%d.%m. %H:00"),
-        "real_temp": -2.4,          # Reálna teplota zo stanice
-        "real_wind_kmh": 42.0,      # Reálna rýchlosť vetra
-        "real_wind_dir": "SZ",      # Smer vetra
-        "real_humidity": 88.0,      # Vlhkosť vzduchu
-        "status": "Online (SHMÚ SYNOP)"
+        "real_temp": 4.5,  # Realistický odhad v prípade výpadku
+        "real_wind_kmh": 22.0,
+        "real_wind_dir": "SZ",
+        "real_humidity": 70.0,
+        "status": "Offline (Fallback odhad)"
     }
 
 @app.get("/health")
