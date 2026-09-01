@@ -9,6 +9,25 @@ import cfgrib
 import requests
 import os
 
+app = FastAPI()
+
+# Dôležité: Povolíme CORS, aby web (frontend) mohol posielať požiadavky na tento server
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Pre produkciu vieš neskôr obmedziť na svoju doménu
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/api/climate-charts")
+def get_climate_charts():
+    # Tu neskôr napojíš dáta zo spracovania GRIB súborov
+    return {
+        "labels": ["Okt", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr"],
+        "vortex_values": [16, 28, 36, 22, 12, None, None]
+    }
+
 # Príklad funkcie na stiahnutie a spracovanie GRIB dát (napr. GFS 850hPa teplota)
 def get_grib_temperature_data():
     # URL na najnovší GFS súbor (alebo NOAA Open Data)
