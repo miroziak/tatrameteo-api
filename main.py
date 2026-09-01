@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.2.7"
+    version="4.2.8"
 )
 
 app.add_middleware(
@@ -207,7 +207,6 @@ def fetch_35_nodes_dwd():
         return None
 
 def calculate_35_node_grid_state(step_idx: int):
-    # step_idx reprezentuje priamo hodinu (0 až 48)
     hours_ahead = step_idx
     tz_sk = datetime.timezone(datetime.timedelta(hours=2))
     now_sk = datetime.datetime.now(tz_sk)
@@ -228,7 +227,7 @@ def calculate_35_node_grid_state(step_idx: int):
         try:
             data_idx = time_list.index(target_iso_prefix)
         except (ValueError, IndexError):
-            data_idx = min(target_dt.hour + (target_dt.day - now_sk.day) * 24, len(time_list) - 1)
+            data_idx = min(step_idx, len(time_list) - 1)
 
         idx = 0
         for j in range(5):
@@ -511,7 +510,6 @@ def health_check():
 
 @app.get("/api/points-grid")
 def get_points_grid(step: int = Query(0, ge=0, le=48)):
-    # Jednotný hodinový endpoint pre posuvník (0 až 48 hodín)
     return calculate_35_node_grid_state(step)
 
 @app.get("/api/forecast")
@@ -523,7 +521,6 @@ def get_hazards_48h():
     hazards = []
     base_dt = datetime.datetime.now()
 
-    # Prejdeme vybrané hodiny v rozsahu 48h (napr. každé 3 hodiny pre rýchle skenovanie výstrah)
     for step in range(0, 49, 3):
         data = calculate_35_node_grid_state(step)
         target_time = base_dt + datetime.timedelta(hours=data["hours_ahead"])
