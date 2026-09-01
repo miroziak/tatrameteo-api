@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.2.7"
+    version="4.2.6"
 )
 
 app.add_middleware(
@@ -353,6 +353,7 @@ def fetch_sounding_ganovce():
             
             shear_0_6km = round(abs(wspd_500 - wspd_850), 1)
 
+            # Orografický override pre Tatry: ak model hlási 0 CAPE, ale padajú zrážky pri teplote > 15°C, ide o lokálnu konvekciu z tepla
             if cape_val < 10.0 and precip_val > 0.1 and t_surface > 15.0:
                 cape_val = 250.0 + (precip_val * 40.0)
                 li_val = -2.1
@@ -403,48 +404,12 @@ def fetch_sounding_ganovce():
             "storm_potential_type": "🟡 Orografické pulzové búrky (Lokálne blesky)",
             "risk_level": "moderate", "freezing_level_m": 3100,
             "levels": [
-                {"name": "Povrch (Gánovce)", "alt": 708, "temp": 19.0, "wind": "14.2 km/h"},
-                {"name": "850 hPa (~1.5 km)", "alt": 1460, "temp": 10.1, "wind": "26.0 km/h (190°)"},
-                {"name": "700 hPa (~3.0 km)", "alt": 3020, "temp": 2.2, "wind": "35.0 km/h (210°)"},
-                {"name": "500 hPa (~5.6 km)", "alt": 5600, "temp": -13.5, "wind": "48.0 km/h (240°)"}
+                {"name": "Povrch (Gánovce)", "alt": 708, "temp": "+19.0 °C", "wind": "14.2 km/h"},
+                {"name": "850 hPa (~1.5 km)", "alt": 1460, "temp": "+10.1 °C", "wind": "26.0 km/h (190°)"},
+                {"name": "700 hPa (~3.0 km)", "alt": 3020, "temp": "+2.2 °C", "wind": "35.0 km/h (210°)"},
+                {"name": "500 hPa (~5.6 km)", "alt": 5600, "temp": "-13.5 °C", "wind": "48.0 km/h (240°)"}
             ]
         }
-
-@app.get("/api/text-forecast")
-def get_text_forecast(step: int = Query(0, ge=0, le=8)):
-    grid_data = calculate_35_node_grid_state(step)
-    priority_points = [p for p in grid_data["points"] if p.get("prio") == 1]
-    
-    if priority_points:
-        max_wind = max(priority_points, key=lambda x: x["wind_kmh"])
-        min_temp = min(priority_points, key=lambda x: x["temp"])
-        max_precip = max(priority_points, key=lambda x: x["precip_mmh"])
-    else:
-        max_wind = min_temp = max_precip = {"name": "Tatry", "wind_kmh": 0, "temp": 0, "precip_mmh": 0}
-
-    hours = grid_data["hours_ahead"]
-    
-    summary_text = (
-        f"Prehľad predpovede pre Vysoké Tatry na horizont +{hours} hodín. "
-        f"Teploty v najvyšších polohách sa pohybujú okolo {min_temp['temp']} °C "
-        f"(lokalita {min_temp['name']}, {min_temp['alt']} m n.m.). "
-        f"Najsilnejší vietor dosahuje rýchlosť do {max_wind['wind_kmh']} km/h "
-        f"na vrchole {max_wind['name']}. "
-    )
-    
-    if max_precip["precip_mmh"] > 0.5:
-        summary_text += f"Očakávajte zrážky s úhrnom do {max_precip['precip_mmh']} mm/h, najmä v oblasti {max_precip['name']}."
-    else:
-        summary_text += "Situácia je bez výraznejších zrážok, prevláda stabilný charakter počasia."
-
-    return {
-        "status": "ok",
-        "step": step,
-        "hours_ahead": hours,
-        "timestamp": datetime.datetime.now().strftime("%d.%m. %H:%M"),
-        "forecast_text": summary_text,
-        "items": priority_points
-    }
 
 @app.get("/")
 def read_root():
@@ -507,3 +472,4 @@ def get_hazards_48h():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    
