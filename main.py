@@ -208,10 +208,6 @@ def fetch_35_nodes_dwd():
 
 def calculate_35_node_grid_state(step_idx: int):
     hours_ahead = step_idx * 6
-    tz_sk = datetime.timezone(datetime.timedelta(hours=2))
-    now_sk = datetime.datetime.now(tz_sk)
-    target_dt = now_sk + datetime.timedelta(hours=hours_ahead)
-    
     dwd_raw = fetch_35_nodes_dwd()
 
     dwd_t = np.zeros((7, 5))
@@ -223,21 +219,25 @@ def calculate_35_node_grid_state(step_idx: int):
 
     if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
         time_list = dwd_raw[0].get("hourly", {}).get("time", [])
-        target_iso_prefix = target_dt.strftime("%Y-%m-%dT%H:00")
-        try:
-            data_idx = time_list.index(target_iso_prefix)
-        except (ValueError, IndexError):
-            data_idx = min(target_dt.hour + (target_dt.day - now_sk.day) * 24, len(time_list) - 1)
+        
+        # OPRAVENÉ: Priamy matematický index namiesto zlyhávajúceho textového hľadania
+        data_idx = min(max(0, step_idx * 6), len(time_list) - 1)
 
         idx = 0
         for j in range(5):
             for i in range(7):
                 n = dwd_raw[idx].get("hourly", {})
-                dwd_t[i, j] = n.get("temperature_2m", [16.0])[data_idx] if len(n.get("temperature_2m", [])) > data_idx else 16.0
-                dwd_wspd[i, j] = (n.get("wind_speed_10m", [15.0])[data_idx] / 3.6) if len(n.get("wind_speed_10m", [])) > data_idx else 4.0
-                dwd_wdir[i, j] = n.get("wind_direction_10m", [315.0])[data_idx] if len(n.get("wind_direction_10m", [])) > data_idx else 315.0
-                dwd_prec[i, j] = n.get("precipitation", [0.0])[data_idx] if len(n.get("precipitation", [])) > data_idx else 0.0
-                dwd_cape[i, j] = n.get("cape", [0.0])[data_idx] if len(n.get("cape", [])) > data_idx else 0.0
+                temps = n.get("temperature_2m", [16.0])
+                winds = n.get("wind_speed_10m", [15.0])
+                dirs = n.get("wind_direction_10m", [315.0])
+                precs = n.get("precipitation", [0.0])
+                capes = n.get("cape", [0.0])
+
+                dwd_t[i, j] = temps[data_idx] if len(temps) > data_idx else temps[-1]
+                dwd_wspd[i, j] = (winds[data_idx] if len(winds) > data_idx else winds[-1]) / 3.6
+                dwd_wdir[i, j] = dirs[data_idx] if len(dirs) > data_idx else dirs[-1]
+                dwd_prec[i, j] = precs[data_idx] if len(precs) > data_idx else precs[-1]
+                dwd_cape[i, j] = capes[data_idx] if len(capes) > data_idx else capes[-1]
                 dwd_dem[i, j] = dwd_raw[idx].get("elevation", 1200.0)
                 idx += 1
     else:
@@ -353,7 +353,6 @@ def fetch_sounding_ganovce():
             
             shear_0_6km = round(abs(wspd_500 - wspd_850), 1)
 
-            # Orografický override pre Tatry: ak model hlási 0 CAPE, ale padajú zrážky pri teplote > 15°C, ide o lokálnu konvekciu z tepla
             if cape_val < 10.0 and precip_val > 0.1 and t_surface > 15.0:
                 cape_val = 250.0 + (precip_val * 40.0)
                 li_val = -2.1
