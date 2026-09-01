@@ -410,7 +410,43 @@ def fetch_sounding_ganovce():
                 {"name": "500 hPa (~5.6 km)", "alt": 5600, "temp": "-13.5 °C", "wind": "48.0 km/h (240°)"}
             ]
         }
+@app.get("/api/text-forecast")
+def get_text_forecast(step: int = Query(0, ge=0, le=8)):
+    grid_data = calculate_35_node_grid_state(step)
+    priority_points = [p for p in grid_data["points"] if p.get("prio") == 1]
+    
+    # Nájdeme extrémy pre slovný popis
+    if priority_points:
+        max_wind = max(priority_points, key=lambda x: x["wind_kmh"])
+        min_temp = min(priority_points, key=lambda x: x["temp"])
+        max_precip = max(priority_points, key=lambda x: x["precip_mmh"])
+    else:
+        max_wind = min_temp = max_precip = {"name": "Tatry", "wind_kmh": 0, "temp": 0, "precip_mmh": 0}
 
+    hours = step * 6
+    
+    # Generovanie slovnej predpovede
+    summary_text = (
+        f"Prehľad predpovede pre Vysoké Tatry na horizont +{hours} hodín. "
+        f"Teploty v najvyšších polohách sa pohybujú okolo {min_temp['temp']} °C "
+        f"(lokalita {min_temp['name']}, {min_temp['alt']} m n.m.). "
+        f"Najsilnejší vietor dosahuje rýchlosť do {max_wind['wind_kmh']} km/h "
+        f"na vrchole {max_wind['name']}. "
+    )
+    
+    if max_precip["precip_mmh"] > 0.5:
+        summary_text += f"Očakávajte zrážky s úhrnom do {max_precip['precip_mmh']} mm/h, najmä v oblasti {max_precip['name']}."
+    else:
+        summary_text += "Situácia je bez výraznejších zrážok, prevláda stabilný charakter počasia."
+
+    return {
+        "status": "ok",
+        "step": step,
+        "hours_ahead": hours,
+        "timestamp": datetime.datetime.now().strftime("%d.%m. %H:%M"),
+        "forecast_text": summary_text,
+        "items": priority_points
+    }
 @app.get("/")
 def read_root():
     return {"status": "ok", "service": "TATRYS-50 35-Node Point Grid", "dwd_nodes": 35, "tatras_points": len(TATRAS_POINTS)}
