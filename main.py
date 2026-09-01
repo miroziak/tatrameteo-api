@@ -517,6 +517,10 @@ def health_check():
     return {"status": "healthy"}
 
 @app.get("/api/points-grid")
+def get_points_grid(step: int = Query(0, ge=0, le=48)):
+    # step teraz predstavuje priamo hodiny (0 až 48)
+    grid_data = calculate_35_node_grid_state_hourly(step)
+    return grid_data
 @app.get("/api/forecast")
 def get_points_grid(step: int = Query(0, ge=0, le=8)):
     return calculate_35_node_grid_state(step)
