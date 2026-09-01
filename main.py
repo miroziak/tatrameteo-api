@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.3.0"
+    version="4.3.1"
 )
 
 app.add_middleware(
@@ -220,21 +220,16 @@ def calculate_35_node_grid_state(step_idx: int):
     if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
         time_list = dwd_raw[0].get("hourly", {}).get("time", [])
         
-        # Oprava: Presné mapovanie hodinového posunu posuvníka na aktuálny index v poli Open-Meteo
-        now_sk = datetime.datetime.now()
-        target_dt = now_sk + datetime.timedelta(hours=hours_ahead)
-        
-        data_idx = 0
-        min_diff = float('inf')
-        for idx, t_str in enumerate(time_list):
-            try:
-                dt = datetime.datetime.fromisoformat(t_str)
-                diff = abs((dt - target_dt).total_seconds())
-                if diff < min_diff:
-                    min_diff = diff
-                    data_idx = idx
-            except Exception:
-                continue
+        # Spoľahlivé mapovanie: keďže Open-Meteo vracia hodinové pole od aktuálnej hodiny,
+        # priamo pripočítame step_idx (0 až 48) k aktuálnemu indexu hodiny v dni, 
+        # prípadne vezmeme index priamo podľa poradia.
+        try:
+            now_iso = datetime.datetime.now().strftime("%Y-%m-%dT%H:00")
+            base_idx = time_list.index(now_iso)
+        except (ValueError, IndexError):
+            base_idx = datetime.datetime.now().hour
+
+        data_idx = min(max(0, base_idx + step_idx), len(time_list) - 1)
 
         idx = 0
         for j in range(5):
