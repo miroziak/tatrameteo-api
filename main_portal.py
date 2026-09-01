@@ -3,6 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 import json
 from datetime import datetime
+from flask import jsonify
+
+@app.route('/api/enso-index')
+def get_enso_index():
+    # Tu môžeš buď parsovať reálne dáta z NOAA, alebo vracať aktuálnu hodnotu
+    # Napríklad aktuálna fáza El Niño s kladnou anomáliou:
+    return jsonify({
+        "value": "+0.9 °C",
+        "phase": "El Niño"
+    })
 
 # Inicializácia aplikácie
 app = FastAPI(title="Meteoportal Backend API")
