@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.3.2"
+    version="4.3.3"
 )
 
 app.add_middleware(
@@ -220,20 +220,34 @@ def calculate_35_node_grid_state(step_idx: int):
     if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
         time_list = dwd_raw[0].get("hourly", {}).get("time", [])
         
-        # ÚPLNE JEDNODUCHÉ A BEZCHYBNÉ MAPOVANIE:
-        # Open-Meteo vracie hodinové pole od aktuálnej hodiny, takže step_idx (0 až 48) 
-        # určuje priamo posun v poli (data_idx). Žiadne hľadanie dátumov, ktoré by zlyhalo!
-        data_idx = min(max(0, step_idx), len(time_list) - 1)
+        # OPRAVA: Nájdeme reálny index v poli Open-Meteo pre aktuálnu hodinu a pripočítame k nemu step_idx
+        base_idx = 0
+        current_iso = datetime.datetime.now().strftime("%Y-%m-%dT%H:00")
+        for idx, t_val in enumerate(time_list):
+            if current_iso in t_val:
+                base_idx = idx
+                break
+
+        # Tu aplikujeme hodinový posun posuvníka (step_idx) priamo na index poľa
+        data_idx = min(max(0, base_idx + step_idx), len(time_list) - 1)
 
         idx = 0
         for j in range(5):
             for i in range(7):
                 n = dwd_raw[idx].get("hourly", {})
-                dwd_t[i, j] = n.get("temperature_2m", [16.0])[data_idx] if len(n.get("temperature_2m", [])) > data_idx else 16.0
-                dwd_wspd[i, j] = (n.get("wind_speed_10m", [15.0])[data_idx] / 3.6) if len(n.get("wind_speed_10m", [])) > data_idx else 4.0
-                dwd_wdir[i, j] = n.get("wind_direction_10m", [315.0])[data_idx] if len(n.get("wind_direction_10m", [])) > data_idx else 315.0
-                dwd_prec[i, j] = n.get("precipitation", [0.0])[data_idx] if len(n.get("precipitation", [])) > data_idx else 0.0
-                dwd_cape[i, j] = n.get("cape", [0.0])[data_idx] if len(n.get("cape", [])) > data_idx else 0.0
+                
+                temps = n.get("temperature_2m", [16.0])
+                winds = n.get("wind_speed_10m", [15.0])
+                dirs = n.get("wind_direction_10m", [315.0])
+                precs = n.get("precipitation", [0.0])
+                capes = n.get("cape", [0.0])
+
+                dwd_t[i, j] = temps[data_idx] if len(temps) > data_idx else temps[-1]
+                dwd_wspd[i, j] = (winds[data_idx] if len(winds) > data_idx else winds[-1]) / 3.6
+                dwd_wdir[i, j] = dirs[data_idx] if len(dirs) > data_idx else dirs[-1]
+                dwd_prec[i, j] = precs[data_idx] if len(precs) > data_idx else precs[-1]
+                dwd_cape[i, j] = capes[data_idx] if len(capes) > data_idx else capes[-1]
+                
                 dwd_dem[i, j] = dwd_raw[idx].get("elevation", 1200.0)
                 idx += 1
     else:
@@ -549,7 +563,7 @@ def get_hazards_48h():
                 })
 
     unique_hazards = []
-    hazards.sort(key=lambda x: x["sort_val"], reverse=True)
+    hazards.hazards.sort(key=lambda x: x["sort_val"], reverse=True) if hasattr(hazards, 'hazards') else hazards.sort(key=lambda x: x["sort_val"], reverse=True)
     for h in hazards:
         count_for_key = sum(1 for item in unique_hazards if item["type"] == h["type"] and item["time"] == h["time"])
         if count_for_key < 2:
