@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.3.3"
+    version="4.3.4"
 )
 
 app.add_middleware(
@@ -220,7 +220,6 @@ def calculate_35_node_grid_state(step_idx: int):
     if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
         time_list = dwd_raw[0].get("hourly", {}).get("time", [])
         
-        # OPRAVA: Nájdeme reálny index v poli Open-Meteo pre aktuálnu hodinu a pripočítame k nemu step_idx
         base_idx = 0
         current_iso = datetime.datetime.now().strftime("%Y-%m-%dT%H:00")
         for idx, t_val in enumerate(time_list):
@@ -228,7 +227,7 @@ def calculate_35_node_grid_state(step_idx: int):
                 base_idx = idx
                 break
 
-        # Tu aplikujeme hodinový posun posuvníka (step_idx) priamo na index poľa
+        # Kľúčové: pripočítavame step_idx priamo k bázovému indexu
         data_idx = min(max(0, base_idx + step_idx), len(time_list) - 1)
 
         idx = 0
@@ -438,7 +437,7 @@ def get_text_forecast(step: int = Query(0, ge=0, le=48)):
         f"Prehľad predpovede pre Vysoké Tatry na horizont +{hours} hodín. "
         f"Teploty v najvyšších polohách sa pohybujú okolo {min_temp['temp']} °C "
         f"(lokalita {min_temp['name']}, {min_temp['alt']} m n.m.). "
-        f"Najsilnejší vietor dosahuje rýchlosť do {max_wind['wind_kmh']} km/h "
+        f"Najsilnejший vietor dosahuje rýchlosť do {max_wind['wind_kmh']} km/h "
         f"na vrchole {max_wind['name']}. "
     )
     
@@ -563,7 +562,7 @@ def get_hazards_48h():
                 })
 
     unique_hazards = []
-    hazards.hazards.sort(key=lambda x: x["sort_val"], reverse=True) if hasattr(hazards, 'hazards') else hazards.sort(key=lambda x: x["sort_val"], reverse=True)
+    hazards.sort(key=lambda x: x["sort_val"], reverse=True)
     for h in hazards:
         count_for_key = sum(1 for item in unique_hazards if item["type"] == h["type"] and item["time"] == h["time"])
         if count_for_key < 2:
