@@ -118,6 +118,31 @@ def get_space_weather():
         }
     except Exception as e:
         return {"error": str(e)}
+import feedparser
+from flask import jsonify
+
+@app.route('/api/news', methods=['GET'])
+def get_meteorological_news():
+    feeds = [
+        {"name": "SWE", "url": "https://www.severe-weather.eu/feed/"},
+        {"name": "NASA", "url": "https://earthobservatory.nasa.gov/feeds/earth-observatory.rss"},
+        {"name": "NHC", "url": "https://www.nhc.noaa.gov/index-at.xml"}
+    ]
+    
+    all_articles = []
+    
+    for feed_info in feeds:
+        parsed = feedparser.parse(feed_info["url"])
+        for entry in parsed.entries[:4]: # Zoberieme 4 najnovšie z každého
+            all_articles.append({
+                "sourceName": feed_info["name"],
+                "title": entry.get("title", "Bez názvu"),
+                "date": entry.get("published", "Aktualizované"),
+                "description": entry.get("summary", "")[:100] + "...",
+                "link": entry.get("link", "#")
+            })
+            
+    return jsonify(all_articles)
 
 @app.get("/api/model-gfs/local")
 def get_gfs_local():
