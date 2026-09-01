@@ -4,6 +4,30 @@ import requests
 import json
 from datetime import datetime
 from flask import jsonify
+import xarray as xr
+import cfgrib
+import requests
+import os
+
+# Príklad funkcie na stiahnutie a spracovanie GRIB dát (napr. GFS 850hPa teplota)
+def get_grib_temperature_data():
+    # URL na najnovší GFS súbor (alebo NOAA Open Data)
+    # Pre reálne nasadenie sa často používa Open-Meteo API pre rýchly cache, 
+    # alebo priame sťahovanie GRIB cez NOAA NOMADS server.
+    
+    # Súbor uložíme na Renderi do dočasného úložiska /tmp
+    grib_path = "/tmp/gfs_data.grib"
+    
+    # Ukážka parsovania pomocou xarray + cfgrib:
+    try:
+        # ds = xr.open_dataset(grib_path, engine='cfgrib')
+        # tu vieš vyfiltrovať konkrétnu hladinu (naps. isobaricInhPa = 850)
+        # temperature_850 = ds.t.sel(isobaricInhPa=850)
+        
+        # Zatiaľ vrátime štruktúrovaný JSON, ktorý pošleme cez API endpoint
+        return {"status": "success", "message": "GRIB dáta spracované"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.route('/api/enso-index')
 def get_enso_index():
