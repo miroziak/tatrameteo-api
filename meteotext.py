@@ -7,11 +7,12 @@ from scipy.interpolate import RegularGridInterpolator
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 app = FastAPI(
     title="METEOTEXT & TATRYS-50 | Avalanche.sk",
-    description="Kompletný zoznam tatranských bodov priamo v pamäti a orografický model.",
-    version="5.1.0"
+    description="Kompletný zoznam tatranských bodov priamo v pamäti, orografický model a PWA podpora.",
+    version="5.4.0"
 )
 
 app.add_middleware(
@@ -116,7 +117,7 @@ def fetch_35_nodes_dwd():
     )
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'MeteotextMemory/5.1'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'MeteotextMemory/5.4'})
         with urllib.request.urlopen(req, timeout=12) as response:
             data = json.loads(response.read().decode())
             CACHE["matrix"] = data
@@ -213,12 +214,22 @@ def api_get_location_forecast(name: str = Query(..., description="Názov lokalit
         return {"status": "error", "message": f"Lokalita '{name}' nenájdená."}
 
     hourly_forecast = []
+    base_now = datetime.datetime.now()
+
     for step in range(49):
+        # Výpočet reálneho dátumu a času pre každý krok
+        target_datetime = base_now + datetime.timedelta(hours=step)
+        v_date = target_datetime.strftime("%d.%m.")
+        v_time = target_datetime.strftime("%H:00")
+
         grid_state = calculate_grid_state(step)
         point_data = next((pt for pt in grid_state["points"] if pt["name"].lower() == name.lower()), None)
+        
         if point_data:
             hourly_forecast.append({
                 "hour_ahead": step,
+                "valid_date": v_date,
+                "valid_time": v_time,
                 "temp_c": point_data["temp"],
                 "wind_kmh": point_data["wind_kmh"],
                 "wind_dir_deg": point_data["wind_dir"],
@@ -227,6 +238,15 @@ def api_get_location_forecast(name: str = Query(..., description="Názov lokalit
             })
 
     return {"status": "ok", "location": matched_point, "forecast": hourly_forecast}
+
+# Endpointy pre PWA
+@app.get("/manifest.json")
+def get_manifest():
+    return FileResponse("manifest.json", media_type="application/json")
+
+@app.get("/sw.js")
+def get_sw():
+    return FileResponse("sw.js", media_type="application/javascript")
 
 @app.get("/health")
 def health_check():
