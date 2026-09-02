@@ -15,6 +15,16 @@ app.add_middleware(
 
 BASE_URL = "https://data.ceps.cz/api"  # Pôvodná doména – momentálne nedostupná
 
+def test_ceps():
+    try:
+        r = requests.get("https://data.ceps.cz/api", timeout=5)
+        print("Status:", r.status_code)
+        print("Body:", r.text[:200])
+    except Exception as e:
+        print("CEPS API nedostupné:", e)
+
+test_ceps()
+
 def fetch_ceps_api(endpoint_name: str, granularity: str = None):
     today = datetime.now()
     date_from = today.strftime("%Y-%m-%d")
