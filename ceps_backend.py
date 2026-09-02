@@ -13,7 +13,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BASE_URL = "https://data.ceps.cz/api"
+BASE_URL = "https://data.ceps.cz/api"  # Pôvodná doména – momentálne nedostupná
 
 def fetch_ceps_api(endpoint_name: str, granularity: str = None):
     today = datetime.now()
@@ -26,18 +26,22 @@ def fetch_ceps_api(endpoint_name: str, granularity: str = None):
         url = f"{BASE_URL}/{endpoint_name}?date_from={date_from}&date_to={date_to}"
 
     try:
-        response = requests.get(url, timeout=15)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=f"Chyba ČEPS API: {response.text}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        # Tu jasne povieme, že problém je na strane CEPS / DNS
+        raise HTTPException(
+            status_code=502,
+            detail=f"CEPS API nedostupné alebo DNS chyba: {str(e)}"
+        )
 
+@app.get("/health")
+def health():
+    return {"status": "ok", "message": "Backend beží, CEPS môže byť nedostupné."}
 
 @app.get("/api/data/{metric}")
 def get_ceps_data(metric: str):
-
     if metric == "odchylka":
         return fetch_ceps_api("OdhadovanaCenaOdchylky")
 
@@ -45,7 +49,6 @@ def get_ceps_data(metric: str):
         return fetch_ceps_api("RegulationEnergy", "MI")
 
     elif metric == "systemova-odchylka":
-        # Toto je správny endpoint pre systémovú odchýlku
         return fetch_ceps_api("RegulationEnergyB", "MI")
 
     elif metric == "cena-re":
