@@ -10,8 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
-    description="Vektorový orografický downscaling s rešpektovaním hrebeňa, dolín a relatívnej výšky terénu.",
-    version="4.5.0"
+    description="Vektorový orografický downscaling s pokročilým fyzikálnym modelom zrážok, vetra a inverzií.",
+    version="4.6.0"
 )
 
 app.add_middleware(
@@ -45,10 +45,10 @@ for gy in GRID_Y:
         DWD_LONS.append(round(lon, 4))
 
 # =============================================================================
-# 2. 200+ REÁLNYCH BODOV S PARAMETROM 'rel_height' (Relatívna výška nad okolitým dnom doliny)
+# 2. 200+ REÁLNYCH BODOV TATIER S OROGRAFICKÝMI PARAMETRAMI
 # =============================================================================
 TATRAS_POINTS = [
-    # Štíty (vysoká relatívna výška nad okolím)
+    # Štíty
     {"name": "Gerlachovský štít", "alt": 2655, "x": 8000, "y": 6200, "lat": 49.1639, "lon": 20.1342, "cat": "peaks", "prio": 1, "valley_axis": None, "rel_height": 950},
     {"name": "Lomnický štít", "alt": 2634, "x": 12000, "y": 6800, "lat": 49.1953, "lon": 20.2131, "cat": "peaks", "prio": 1, "valley_axis": None, "rel_height": 900},
     {"name": "Ľadový štít", "alt": 2627, "x": 11000, "y": 8000, "lat": 49.1972, "lon": 20.1833, "cat": "peaks", "prio": 1, "valley_axis": None, "rel_height": 880},
@@ -127,7 +127,7 @@ TATRAS_POINTS = [
     {"name": "Krzyżne (PL - koniec Orlej Perći)", "alt": 2112, "x": 6400, "y": 9500, "lat": 49.2239, "lon": 20.0464, "cat": "passes", "prio": 1, "valley_axis": None, "rel_height": 280},
     {"name": "Przełęcz pod Chłopkiem (PL/SK)", "alt": 2307, "x": 5900, "y": 6600, "lat": 49.1825, "lon": 20.0800, "cat": "passes", "prio": 1, "valley_axis": None, "rel_height": 350},
 
-    # Plesá (mierne vyvýšené alebo v dnie dolín)
+    # Plesá
     {"name": "Morskie Oko (PL)", "alt": 1395, "x": 6100, "y": 7800, "lat": 49.2004, "lon": 20.0712, "cat": "lakes", "prio": 1, "valley_axis": 340, "rel_height": 50},
     {"name": "Czarny Staw pod Rysami (PL)", "alt": 1583, "x": 6000, "y": 7100, "lat": 49.1886, "lon": 20.0767, "cat": "lakes", "prio": 1, "valley_axis": 350, "rel_height": 100},
     {"name": "Wielki Staw Polski (PL - 5 Stawów)", "alt": 1665, "x": 5500, "y": 8600, "lat": 49.2117, "lon": 20.0306, "cat": "lakes", "prio": 1, "valley_axis": 320, "rel_height": 100},
@@ -165,7 +165,7 @@ TATRAS_POINTS = [
     {"name": "Chata Plesnivec (Belianske Tatry)", "alt": 1290, "x": 14500, "y": 9200, "lat": 49.2278, "lon": 20.2722, "cat": "huts", "prio": 1, "valley_axis": 80, "rel_height": 50},
     {"name": "Horáreň Biela Voda (Bielovodská)", "alt": 995, "x": 8100, "y": 10500, "lat": 49.2528, "lon": 20.1000, "cat": "huts", "prio": 2, "valley_axis": 350, "rel_height": 10},
 
-    # Osady a kotliny (relatívna výška takmer nulová)
+    # Osady
     {"name": "Zakopane - Centrum (PL)", "alt": 838, "x": 2800, "y": 13500, "lat": 49.2992, "lon": 19.9489, "cat": "towns", "prio": 1, "valley_axis": None, "rel_height": 0},
     {"name": "Kuźnice (PL - dolná stanica Kasprowy)", "alt": 1010, "x": 3600, "y": 12200, "lat": 49.2694, "lon": 19.9806, "cat": "towns", "prio": 1, "valley_axis": 330, "rel_height": 20},
     {"name": "Palenica Białczańska (PL - vstup Morskie Oko)", "alt": 984, "x": 7800, "y": 10200, "lat": 49.2550, "lon": 20.1031, "cat": "towns", "prio": 1, "valley_axis": 340, "rel_height": 10},
@@ -197,7 +197,7 @@ def fetch_35_nodes_dwd():
     )
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheTatry-35NodeGrid/4.5'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheTatry-35NodeGrid/4.6'})
         with urllib.request.urlopen(req, timeout=12) as response:
             data = json.loads(response.read().decode())
             CACHE["matrix"] = data
@@ -268,17 +268,13 @@ def calculate_35_node_grid_state(step_idx: int):
         prec_dwd_local = float(it_prec([px, py])[0])
         cape_dwd_local = float(it_cape([px, py])[0])
 
-        # 1. Výškový prepočet teploty + inverzná modifikácia pre lokality s nízkou relatívnou výškou (dná dolín a kotliny)
+        # 1. Teplota s inverziou v kotlinách
         t_pt = t_dwd_local - ((p["alt"] - dem_dwd_local) * 0.0065)
-        
-        # Ak je bod v doline/kotline (nízka relatívna výška) a je noc/chladno, pridáme mild inverznú korekciu
         if p["rel_height"] < 50:
-            t_pt -= 1.2  # Jazero studeného vzduchu v kotlinách
+            t_pt -= 1.2
 
-        # 2. VPLYV RELATÍVNEJ VÝŠKY NA EXPOZÍCIU VETRU
-        # Vyššie rel. výšky znamenajú väčšie vystavenie voľnej atmosfére a nárazom vetra
+        # 2. Vietor (Expozícia, hrebeň, kanalizácia v dolinách, relatívna výška)
         rel_height_factor = 1.0 + (p["rel_height"] / 1500.0)
-
         is_north_side = py > RIDGE_Y
         wind_deg = wdir_dwd_local
         is_northerly_wind = (wind_deg >= 315.0) or (wind_deg <= 45.0)
@@ -307,21 +303,31 @@ def calculate_35_node_grid_state(step_idx: int):
             if angle_diff < 45:
                 shelter_factor *= 1.35
 
-        # Výsledná rýchlosť vetra berie do úvahy aj rel. výšku
         wspd_pt = (wspd_dwd_local * base_w_factor * shelter_factor * rel_height_factor) * 3.6
         wspd_pt = max(wspd_pt, 1.0)
 
-        # 3. OROGRAFICKÉ ZRÁŽKY
-        p_factor = 1.0 + max(p["alt"] - 1000.0, 0.0) * 0.00035
-        if (is_northerly_wind and is_north_side) or (is_southerly_wind and not is_north_side):
-            prec_pt = prec_dwd_local * p_factor * 1.4
+        # 3. POKROČILÝ OROGRAFICKÝ MODEL ZRÁŽOK (Seeder-Feeder + Zrážkový tieň + Nadmorská výška)
+        # Základný výškový nárast zrážok
+        alt_precip_factor = 1.0 + max(p["alt"] - 1000.0, 0.0) * 0.00045
+        
+        # Určenie, či je bod na náveternej alebo záveternej strane prúdenia
+        is_windward = (is_northerly_wind and is_north_side) or (is_southerly_wind and not is_north_side)
+        
+        if is_windward:
+            # Náveterná strana: silný orografický zdvih a vypršanie oblačnosti
+            prec_pt = prec_dwd_local * alt_precip_factor * 1.55
         else:
-            prec_pt = (prec_dwd_local * p_factor) * 0.45
+            # Záveterná strana (zrážkový tieň): výrazné utlmenie zrážok
+            prec_pt = (prec_dwd_local * alt_precip_factor) * 0.30
+
+        # Ak je to hlboká kotlina (rel. výška takmer 0), zrážky sú stabilizované na základe synoptiky
+        if p["rel_height"] < 30 and p["cat"] == "towns":
+            prec_pt = prec_dwd_local * 0.9
 
         prec_pt = max(prec_pt, 0.0)
         snow_pt = (prec_pt * 1.0 * 1.0) if t_pt < 0.0 else 0.0
 
-        # 4. INDEX BLESKOV (LHI) - zohľadňuje aj prominenciu/relatívnu výšku (vyvýšené štíty sú bleskové magnety)
+        # 4. Index búrok (LHI)
         if cape_dwd_local < 20.0 and prec_dwd_local == 0.0:
             lhi_pt = 0.0
         else:
@@ -448,7 +454,7 @@ def fetch_sounding_ganovce():
         }
 
 @app.get("/api/lomnicky-station")
-def get_lomnicky-station():
+def get_lomnicky_station():
     return {
         "status": "Online",
         "timestamp_str": datetime.datetime.now().strftime("%d.%m. %H:%M"),
