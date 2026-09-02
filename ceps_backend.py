@@ -4,10 +4,7 @@ import requests
 from datetime import datetime
 import xml.etree.ElementTree as ET
 
-# OBSYD klient
-from obsyd import Obsyd
-
-app = FastAPI(title="Avalanche Trade API – ČEPS + OBSYD")
+app = FastAPI(title="Avalanche Trade ČEPS API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,10 +13,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# -----------------------------
-# CEPS SOAP API
-# -----------------------------
 
 SOAP_URL = "https://www.ceps.cz/_layouts/CepsData.asmx"
 
@@ -46,11 +39,13 @@ def fetch_soap_data(method_name: str, extra_params: str = ""):
     
     try:
         response = requests.post(SOAP_URL, data=soap_body, headers=headers, timeout=15)
+        
         if response.status_code == 200:
             root = ET.fromstring(response.content)
             series_map = {}
             items = []
             
+            # Prečítanie XML hlavičky pre názvy sérií (aFRR+, mFRR atď.)
             for elem in root.iter():
                 if elem.tag.endswith('serie'):
                     s_id = elem.attrib.get('id')
@@ -58,6 +53,7 @@ def fetch_soap_data(method_name: str, extra_params: str = ""):
                     if s_id and s_name:
                         series_map[s_id] = s_name
 
+            # Extrakcia samotných dát
             for elem in root.iter():
                 if elem.tag.endswith('item'):
                     items.append(elem.attrib)
@@ -67,7 +63,6 @@ def fetch_soap_data(method_name: str, extra_params: str = ""):
             raise HTTPException(status_code=response.status_code, detail=f"Chyba API: {response.text}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/api/data/{metric}")
 def get_ceps_data(metric: str):
@@ -83,69 +78,3 @@ def get_ceps_data(metric: str):
         return fetch_soap_data("AktualniCenaRE", params)
     else:
         raise HTTPException(status_code=404, detail="Neznáma metrika")
-
-
-# -----------------------------
-# OBSYD API (Podľa oficiálnej špecifikácie)
-# -----------------------------
-
-ob = Obsyd()
-
-@app.get("/api/obsyd/dayahead/{zone}")
-def obsyd_dayahead(zone: str, start: str = None, end: str = None):
-    """
-    Day-ahead ceny (hodinové) pre danú zónu (napr. CZ, SK, DE_LU...)
-    """
-    try:
-        df = ob.series("price.dayahead", zone, start=start, end=end)
-        return df.reset_index().to_dict(orient="records")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/obsyd/dayahead-qh/{zone}")
-def obsyd_dayahead_qh(zone: str, start: str = None, end: str = None):
-    """
-    15-minútové SDAC ceny (Day-ahead quarter-hourly)
-    """
-    try:
-        df = ob.series("price.dayahead.qh", zone, start=start, end=end)
-        return df.reset_index().to_dict(orient="records")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/obsyd/load/{zone}")
-def obsyd_load(zone: str, start: str = None, end: str = None):
-    """
-    Skutočná spotreba (load.actual)
-    """
-    try:
-        df = ob.series("load.actual", zone, start=start, end=end)
-        return df.reset_index().to_dict(orient="records")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/obsyd/genmix/{zone}")
-def obsyd_genmix(zone: str, resolution: str = "hourly"):
-    """
-    Generation mix (rozpis výroby podľa technológií)
-    """
-    try:
-        df = ob.genmix(zone, resolution=resolution)
-        return df.reset_index().to_dict(orient="records")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/obsyd/flows/{zone}")
-def obsyd_flows(zone: str, start: str = None, end: str = None):
-    """
-    Cezhraničné toky (Cross-border flows)
-    """
-    try:
-        df = ob.series("flows.crossborder", zone, start=start, end=end)
-        return df.reset_index().to_dict(orient="records")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
