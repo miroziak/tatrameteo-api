@@ -77,46 +77,23 @@ def get_ceps_data(metric: str):
         items = []
         prices = []
         
-        # Zdroje na vyskúšanie (porovnanie viacerých verejných API poskytujúcich dáta z OTE)
-        sources = [
-            "https://api.spotovky.cz/v1/today",
-            "https://www.ote-cr.cz/json/vdt" # Ilustratívny endpoint / prípadne iný verejný aggregator
-        ]
-        
-        success = False
-        for url in sources:
-            try:
-                r = requests.get(url, timeout=5)
-                if r.status_code == 200:
-                    data = r.json()
-                    for entry in data:
-                        time_str = entry.get("time") or entry.get("date") or entry.get("hour")
-                        price_val = float(entry.get("price_eur") or entry.get("price") or entry.get("value") or 0)
-                        
-                        if time_str and price_val > 0:
-                            prices.append(price_val)
-                            items.append({
-                                "time": time_str,
-                                "vdt_cena": price_val
-                            })
-                    if items:
-                        success = True
-                        break
-            except Exception:
-                continue
-                
-        # Ak by externejšie API zlyhali, vygenerujeme robustný reálny model zodpovedajúci dnešnému dňu (150€ špičky)
-        if not success or not items:
-            today_midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            for hour in range(24):
-                slot_time = today_midnight + timedelta(hours=hour)
-                # Reálnejší profil s večerným peakom na 150€
-                peak_val = 150.0 if hour in [18, 19, 20] else (95.0 + (hour * 2) % 30)
-                prices.append(peak_val)
-                items.append({
-                    "time": slot_time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    "vdt_cena": peak_val
-                })
+        try:
+            # Sťahujeme živé dáta priamo z prevereného verejného API
+            r = requests.get("https://api.spotovky.cz/v1/today", timeout=8)
+            if r.status_code == 200:
+                data = r.json()
+                for entry in data:
+                    time_val = entry.get("time") or entry.get("date") or entry.get("timeLocalStart")
+                    price_val = float(entry.get("priceEUR") or entry.get("price_eur") or entry.get("price") or 0)
+                    
+                    if time_val and price_val != 0:
+                        prices.append(price_val)
+                        items.append({
+                            "time": time_val,
+                            "vdt_cena": price_val
+                        })
+        except Exception as e:
+            print(f"Chyba pri sťahovaní reálnych dát VDT: {e}")
 
         return {
             "series": series_map,
