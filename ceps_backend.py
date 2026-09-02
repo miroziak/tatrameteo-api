@@ -17,12 +17,10 @@ app.add_middleware(
 SOAP_URL = "https://www.ceps.cz/_layouts/CepsData.asmx"
 
 def fetch_soap_data(method_name: str, extra_params: str = ""):
-    # ČEPS vyžaduje lokálny čas (CET/CEST) bez informácie o časovej zóne
     today = datetime.now()
     date_from = today.strftime("%Y-%m-%dT00:00:00")
     date_to = today.strftime("%Y-%m-%dT23:59:59")
     
-    # Zostavenie XML SOAP obálky presne podľa špecifikácie ČEPS
     soap_body = f"""<?xml version="1.0" encoding="utf-8"?>
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
       <soap:Body>
@@ -43,34 +41,41 @@ def fetch_soap_data(method_name: str, extra_params: str = ""):
         response = requests.post(SOAP_URL, data=soap_body, headers=headers, timeout=15)
         
         if response.status_code == 200:
-            # Parsovanie vráteného XML dokumentu
             root = ET.fromstring(response.content)
+            series_map = {}
             items = []
             
-            # Vyhľadanie všetkých značiek <item>, ktoré obsahujú dáta
+            # NOVÉ: Prečítanie XML hlavičky, aby sme vedeli, či je value1 aFRR+ atď.
+            for elem in root.iter():
+                if elem.tag.endswith('serie'):
+                    s_id = elem.attrib.get('id')
+                    s_name = elem.attrib.get('name')
+                    if s_id and s_name:
+                        series_map[s_id] = s_name
+
+            # Extrakcia samotných dát
             for elem in root.iter():
                 if elem.tag.endswith('item'):
                     items.append(elem.attrib)
                     
-            return items
+            # Backend teraz pošle aj slovník s názvami sérií
+            return {"series": series_map, "items": items}
         else:
-            raise HTTPException(status_code=response.status_code, detail=f"Chyba ČEPS API: {response.text}")
+            raise HTTPException(status_code=response.status_code, detail=f"Chyba API: {response.text}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/data/{metric}")
 def get_ceps_data(metric: str):
-    # Mapovanie metód presne podľa poskytnutého manuálu
     if metric == "odchylka":
         return fetch_soap_data("OdhadovanaCenaOdchylky")
     elif metric == "systemova-odchylka":
         return fetch_soap_data("AktualniSystemovaOdchylkaCR")
     elif metric == "aktivace-svr":
-        # Doplnené základné parametre podľa dokumentácie
         params = "<agregation>MI</agregation><function>AVG</function><param1>all</param1>"
         return fetch_soap_data("AktivaceSVRvCR", params)
     elif metric == "cena-re":
-        # Toto mapovanie môžeme doladiť, ak by 'OfferPrices' nevracalo presne to, čo hľadáte
-        return fetch_soap_data("OfferPrices") 
+        params = "<agregation>MI</agregation><function>AVG</function>"
+        return fetch_soap_data("RegulationEnergy", params)
     else:
         raise HTTPException(status_code=404, detail="Neznáma metrika")
