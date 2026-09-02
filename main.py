@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling s pokročilým fyzikálnym modelom a API pre externé aplikácie.",
-    version="4.9.0"
+    version="4.10.0"
 )
 
 app.add_middleware(
@@ -198,7 +198,7 @@ def fetch_35_nodes_dwd():
     )
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheTatry-35NodeGrid/4.9'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'AvalancheTatry-35NodeGrid/4.10'})
         with urllib.request.urlopen(req, timeout=12) as response:
             data = json.loads(response.read().decode())
             CACHE["matrix"] = data
@@ -210,6 +210,13 @@ def fetch_35_nodes_dwd():
 
 def calculate_35_node_grid_state(step_idx: int):
     hours_ahead = step_idx
+    
+    # Výpočet reálneho dátumu a času (bez roku, čas len vo formáte hodín)
+    base_now = datetime.datetime.now()
+    target_datetime = base_now + datetime.timedelta(hours=hours_ahead)
+    valid_date_str = target_datetime.strftime("%d.%m.")  # Napr. 02.09.
+    valid_time_str = target_datetime.strftime("%H:00")  # Napr. 15:00
+
     dwd_raw = fetch_35_nodes_dwd()
 
     dwd_t = np.zeros((7, 5))
@@ -349,7 +356,16 @@ def calculate_35_node_grid_state(step_idx: int):
             "precip_mmh": round(prec_pt, 1), "snow_6h_cm": round(snow_pt, 1), "lhi": round(lhi_pt, 0)
         })
 
-    return {"status": "ok", "step": step_idx, "hours_ahead": hours_ahead, "dwd_nodes_used": 35, "count": len(results), "points": results}
+    return {
+        "status": "ok", 
+        "step": step_idx, 
+        "hours_ahead": hours_ahead, 
+        "valid_date": valid_date_str,
+        "valid_time": valid_time_str,
+        "dwd_nodes_used": 35, 
+        "count": len(results), 
+        "points": results
+    }
 
 SOUNDING_CACHE = {"ts": 0, "data": None}
 
@@ -482,7 +498,7 @@ def api_get_locations():
 
 @app.get("/api/v1/location-forecast")
 def api_get_location_forecast(name: str = Query(..., description="Presný názov lokality, napr. Lomnický štít")):
-    """Vráti 48-hodinovú predpoveď pre konkrétnu zadanú lokalitu."""
+    """Vráti 48-hodinovú predpoveď pre konkrétnu zadanú lokalitu vrátane času vo formáte hodín."""
     matched_point = next((p for p in TATRAS_POINTS if p["name"].lower() == name.lower()), None)
     if not matched_point:
         return {"status": "error", "message": f"Lokalita '{name}' nebola nájdená."}
@@ -494,6 +510,8 @@ def api_get_location_forecast(name: str = Query(..., description="Presný názov
         if point_data:
             hourly_forecast.append({
                 "hour_ahead": step,
+                "valid_date": grid_state["valid_date"],
+                "valid_time": grid_state["valid_time"],
                 "temp_c": point_data["temp"],
                 "wind_kmh": point_data["wind_kmh"],
                 "wind_dir_deg": point_data["wind_dir"],
