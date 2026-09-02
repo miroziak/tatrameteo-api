@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 app = FastAPI(
     title="METEOTEXT & TATRYS-50 | Avalanche.sk",
     description="Kompletný zoznam tatranských bodov priamo v pamäti, orografický model a PWA podpora.",
-    version="5.6.0"
+    version="5.7.0"
 )
 
 app.add_middleware(
@@ -120,7 +120,7 @@ def fetch_35_nodes_dwd():
     )
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'MeteotextMemory/5.6'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'MeteotextMemory/5.7'})
         with urllib.request.urlopen(req, timeout=12) as response:
             data = json.loads(response.read().decode())
             CACHE["matrix"] = data
@@ -132,12 +132,6 @@ def fetch_35_nodes_dwd():
 
 def calculate_grid_state(step_idx: int):
     hours_ahead = step_idx
-    
-    # Použijeme priamo časovú zónu Europe/Bratislava
-    base_now = datetime.datetime.now(TZ_TATRY)
-    target_datetime = base_now + datetime.timedelta(hours=hours_ahead)
-    target_str = target_datetime.strftime("%Y-%m-%dT%H:00")
-
     dwd_raw = fetch_35_nodes_dwd()
 
     dwd_t = np.zeros((7, 5))
@@ -150,11 +144,14 @@ def calculate_grid_state(step_idx: int):
     if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
         time_list = dwd_raw[0].get("hourly", {}).get("time", [])
         
-        # Hľadáme presnú zhodu s tatranským časom v poli Open-Meteo
-        if target_str in time_list:
-            data_idx = time_list.index(target_str)
-        else:
-            data_idx = min(max(0, step_idx), len(time_list) - 1)
+        # Zistíme aktuálnu hodinu v Bratislave a nájdeme, na ktorom indexu v poli začíname
+        now_local = datetime.datetime.now(TZ_TATRY)
+        current_hour = now_local.hour
+        
+        # Predpokladáme, že Open-Meteo začína od polnoci (00:00) dnešného dňa,
+        # takže index pre aktuálnu hodinu je priamo aktuálna hodina + posun kroku
+        base_index = current_hour
+        data_idx = min(base_index + step_idx, len(time_list) - 1)
 
         idx = 0
         for j in range(5):
