@@ -4,7 +4,6 @@ import requests
 
 app = FastAPI(title="Avalanche Trade ČEPS API")
 
-# Povolenie CORS pre váš web
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://avalanche.sk", "https://www.avalanche.sk"],
@@ -37,9 +36,12 @@ def fetch_ceps_graph(method_name: str):
 
 @app.get("/api/data/{metric}")
 def get_ceps_data(metric: str):
+    # Mapovanie na presné názvy metód zistené z ČEPS rozhrania
     methods_map = {
         "odchylka": "OdhadovanaCenaOdchylky",
-        # Sem si môžete postupne doplniť ďalšie metriky podľa potreby
+        "aktivace-svr": "AktivaceSVRvCR",
+        "systemova-odchylka": "AktualniSystemovaOdchylkaCR",
+        "cena-re": "AktualniCenaRE"
     }
     
     if metric not in methods_map:
