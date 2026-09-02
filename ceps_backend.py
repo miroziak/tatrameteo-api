@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
 
 app = FastAPI(title="Avalanche Trade ČEPS & OTE API")
@@ -77,16 +77,28 @@ def get_ceps_data(metric: str):
         params = "<agregation>MI</agregation><function>AVG</function>"
         return fetch_soap_data("AktualniCenaRE", params)
     elif metric == "vnitrodenni-trh":
-        # Pridaná podpora pre vnitrodenní trh (aktuálne pripravená štruktúra / mock pre dashboard)
-        # Sem môžete neskôr doplniť reálne sťahovanie/parsovanie dát z OTE alebo verejných zdrojov
+        # Generovanie hodinových výsledkov obchodov na VDT (00:00 až 23:00)
+        series_map = {
+            "vdt_cena": "Cena VDT (EUR/MWh)"
+        }
+        items = []
+        today_midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        for hour in range(24):
+            slot_time = today_midnight + timedelta(hours=hour)
+            time_str = slot_time.strftime("%Y-%m-%dT%H:%M:%S")
+            
+            # Simulácia / výpočet hodinovej ceny pre VDT (tu neskôr napojíte reálny parser z OTE)
+            simulated_price = round(70.0 + (hour * 1.5) % 25, 2)
+            
+            items.append({
+                "time": time_str,
+                "vdt_cena": simulated_price
+            })
+            
         return {
-            "series": {
-                "vdt_cena": "Váž. prům. cena VDT (EUR/MWh)",
-                "vdt_objem": "Zobchodovaný objem (MWh)"
-            },
-            "items": [
-                {"time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), "vdt_cena": 85.50, "vdt_objem": 124.5}
-            ]
+            "series": series_map,
+            "items": items
         }
     else:
         raise HTTPException(status_code=404, detail="Neznáma metrika")
