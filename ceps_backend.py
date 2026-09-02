@@ -1,10 +1,10 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 import xml.etree.ElementTree as ET
 
-app = FastAPI(title="Avalanche Trade ČEPS & OTE API")
+app = FastAPI(title="Avalanche Trade ČEPS API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,19 +39,25 @@ def fetch_soap_data(method_name: str, extra_params: str = ""):
     
     try:
         response = requests.post(SOAP_URL, data=soap_body, headers=headers, timeout=15)
+        
         if response.status_code == 200:
             root = ET.fromstring(response.content)
             series_map = {}
             items = []
+            
+            # Prečítanie XML hlavičky pre názvy sérií (aFRR+, mFRR atď.)
             for elem in root.iter():
                 if elem.tag.endswith('serie'):
                     s_id = elem.attrib.get('id')
                     s_name = elem.attrib.get('name')
                     if s_id and s_name:
                         series_map[s_id] = s_name
+
+            # Extrakcia samotných dát
             for elem in root.iter():
                 if elem.tag.endswith('item'):
                     items.append(elem.attrib)
+                    
             return {"series": series_map, "items": items}
         else:
             raise HTTPException(status_code=response.status_code, detail=f"Chyba API: {response.text}")
@@ -70,36 +76,5 @@ def get_ceps_data(metric: str):
     elif metric == "cena-re":
         params = "<agregation>MI</agregation><function>AVG</function>"
         return fetch_soap_data("AktualniCenaRE", params)
-    elif metric == "vnitrodenni-trh":
-        series_map = {
-            "vdt_cena": "Reálna cena VDT / Spot (EUR/MWh)"
-        }
-        items = []
-        prices = []
-        
-        try:
-            # Sťahujeme živé dáta priamo z prevereného verejného API
-            r = requests.get("https://api.spotovky.cz/v1/today", timeout=8)
-            if r.status_code == 200:
-                data = r.json()
-                for entry in data:
-                    time_val = entry.get("time") or entry.get("date") or entry.get("timeLocalStart")
-                    price_val = float(entry.get("priceEUR") or entry.get("price_eur") or entry.get("price") or 0)
-                    
-                    if time_val and price_val != 0:
-                        prices.append(price_val)
-                        items.append({
-                            "time": time_val,
-                            "vdt_cena": price_val
-                        })
-        except Exception as e:
-            print(f"Chyba pri sťahovaní reálnych dát VDT: {e}")
-
-        return {
-            "series": series_map,
-            "items": items,
-            "min_price": min(prices) if prices else 0,
-            "max_price": max(prices) if prices else 0
-        }
     else:
         raise HTTPException(status_code=404, detail="Neznáma metrika")
