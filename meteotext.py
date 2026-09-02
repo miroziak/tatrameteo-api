@@ -3,7 +3,6 @@ import json
 import datetime
 import urllib.request
 import numpy as np
-from zoneinfo import ZoneInfo
 from scipy.interpolate import RegularGridInterpolator
 
 from fastapi import FastAPI, Query
@@ -13,7 +12,7 @@ from fastapi.responses import FileResponse
 app = FastAPI(
     title="METEOTEXT & TATRYS-50 | Avalanche.sk",
     description="Kompletný zoznam tatranských bodov priamo v pamäti, orografický model a PWA podpora.",
-    version="5.8.0"
+    version="5.5.0"
 )
 
 app.add_middleware(
@@ -23,8 +22,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-TZ_TATRY = ZoneInfo("Europe/Bratislava")
 
 # =============================================================================
 # 1. 35 REFERENČNÝCH UZLOV DWD ICON (7 x 5 mriežka, krok ~2.2 km)
@@ -120,7 +117,7 @@ def fetch_35_nodes_dwd():
     )
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'MeteotextMemory/5.8'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'MeteotextMemory/5.5'})
         with urllib.request.urlopen(req, timeout=12) as response:
             data = json.loads(response.read().decode())
             CACHE["matrix"] = data
@@ -132,6 +129,12 @@ def fetch_35_nodes_dwd():
 
 def calculate_grid_state(step_idx: int):
     hours_ahead = step_idx
+    
+    # Oprava: Vypočítame presný ISO čas (napr. "2026-09-02T13:00") zodpovedajúci reálnemu posunu
+    base_now = datetime.datetime.now()
+    target_datetime = base_now + datetime.timedelta(hours=hours_ahead)
+    target_str = target_datetime.strftime("%Y-%m-%dT%H:00")
+
     dwd_raw = fetch_35_nodes_dwd()
 
     dwd_t = np.zeros((7, 5))
@@ -144,23 +147,11 @@ def calculate_grid_state(step_idx: int):
     if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
         time_list = dwd_raw[0].get("hourly", {}).get("time", [])
         
-        # Vypočítame reálny cieľový čas pre tento konkrétny krokový index (+ step_idx hodín) v zóne Tatier
-        now_local = datetime.datetime.now(TZ_TATRY)
-        target_dt = now_local + datetime.timedelta(hours=step_idx)
-        
-        # Open-Meteo vracia časové reťazce vo formáte "YYYY-MM-DD HH:00" alebo "YYYY-MM-DDTHH:00"
-        target_str_space = target_dt.strftime("%Y-%m-%d %H:00")
-        target_str_iso = target_dt.strftime("%Y-%m-%dT%H:00")
-
-        data_idx = 0
-        if target_str_space in time_list:
-            data_idx = time_list.index(target_str_space)
-        elif target_str_iso in time_list:
-            data_idx = time_list.index(target_str_iso)
+        # Nájdeme presný index v poli podľa reálneho času namiesto slepého indexovania step_idx
+        if target_str in time_list:
+            data_idx = time_list.index(target_str)
         else:
-            # Fallback: ak presný reťazec nenájde, posunieme sa matematicky podľa step_idx od aktuálnej hodiny
-            base_index = now_local.hour
-            data_idx = min(base_index + step_idx, len(time_list) - 1)
+            data_idx = min(max(0, step_idx), len(time_list) - 1)
 
         idx = 0
         for j in range(5):
@@ -234,7 +225,7 @@ def api_get_location_forecast(name: str = Query(..., description="Názov lokalit
         return {"status": "error", "message": f"Lokalita '{name}' nenájdená."}
 
     hourly_forecast = []
-    base_now = datetime.datetime.now(TZ_TATRY)
+    base_now = datetime.datetime.now()
 
     for step in range(49):
         target_datetime = base_now + datetime.timedelta(hours=step)
