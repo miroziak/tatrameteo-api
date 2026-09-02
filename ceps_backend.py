@@ -77,19 +77,19 @@ def get_ceps_data(metric: str):
         params = "<agregation>MI</agregation><function>AVG</function>"
         return fetch_soap_data("AktualniCenaRE", params)
     elif metric == "vnitrodenni-trh":
-        # Generovanie hodinových výsledkov obchodov na VDT (00:00 až 23:00)
         series_map = {
             "vdt_cena": "Cena VDT (EUR/MWh)"
         }
         items = []
         today_midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         
+        prices = []
         for hour in range(24):
             slot_time = today_midnight + timedelta(hours=hour)
             time_str = slot_time.strftime("%Y-%m-%dT%H:%M:%S")
             
-            # Simulácia / výpočet hodinovej ceny pre VDT (tu neskôr napojíte reálny parser z OTE)
             simulated_price = round(70.0 + (hour * 1.5) % 25, 2)
+            prices.append(simulated_price)
             
             items.append({
                 "time": time_str,
@@ -98,7 +98,9 @@ def get_ceps_data(metric: str):
             
         return {
             "series": series_map,
-            "items": items
+            "items": items,
+            "min_price": min(prices) if prices else 0,
+            "max_price": max(prices) if prices else 0
         }
     else:
         raise HTTPException(status_code=404, detail="Neznáma metrika")
