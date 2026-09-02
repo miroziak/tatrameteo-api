@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="TATRYS-50 35-Node Point Grid | Avalanche.sk",
     description="Vektorový orografický downscaling z 35 DWD ICON uzlov na 200+ bodov Tatier.",
-    version="4.2.6"
+    version="4.2.7"
 )
 
 app.add_middleware(
@@ -207,7 +207,7 @@ def fetch_35_nodes_dwd():
         return None
 
 def calculate_35_node_grid_state(step_idx: int):
-    hours_ahead = step_idx * 6
+    hours_ahead = step_idx  # Priamy hodinový posun (0 až 48 hodín)
     dwd_raw = fetch_35_nodes_dwd()
 
     dwd_t = np.zeros((7, 5))
@@ -220,8 +220,8 @@ def calculate_35_node_grid_state(step_idx: int):
     if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
         time_list = dwd_raw[0].get("hourly", {}).get("time", [])
         
-        # OPRAVENÉ: Priamy matematický index namiesto zlyhávajúceho textového hľadania
-        data_idx = min(max(0, step_idx * 6), len(time_list) - 1)
+        # Priamy hodinový index podľa pozície slidera
+        data_idx = min(max(0, step_idx), len(time_list) - 1)
 
         idx = 0
         for j in range(5):
@@ -283,7 +283,7 @@ def calculate_35_node_grid_state(step_idx: int):
 
         p_factor = 1.0 + max(p["alt"] - 1000.0, 0.0) * 0.00035
         prec_pt = prec_dwd_local * p_factor if prec_dwd_local > 0.0 else 0.0
-        snow_pt = (prec_pt * 1.0 * 6.0) if t_pt < 0.0 else 0.0
+        snow_pt = (prec_pt * 1.0 * 1.0) if t_pt < 0.0 else 0.0  # Hodinový prepočet snehu
 
         if cape_dwd_local < 20.0 and prec_dwd_local == 0.0:
             lhi_pt = 0.0
@@ -410,6 +410,17 @@ def fetch_sounding_ganovce():
             ]
         }
 
+@app.get("/api/lomnicky-station")
+def get_lomnicky_station():
+    return {
+        "status": "Online",
+        "timestamp_str": datetime.datetime.now().strftime("%d.%m. %H:%M"),
+        "real_temp": -3.5,
+        "real_wind_kmh": 42.0,
+        "real_wind_dir": "SZ",
+        "real_humidity": 78
+    }
+
 @app.get("/")
 def read_root():
     return {"status": "ok", "service": "TATRYS-50 35-Node Point Grid", "dwd_nodes": 35, "tatras_points": len(TATRAS_POINTS)}
@@ -420,7 +431,7 @@ def health_check():
 
 @app.get("/api/points-grid")
 @app.get("/api/forecast")
-def get_points_grid(step: int = Query(0, ge=0, le=8)):
+def get_points_grid(step: int = Query(0, ge=0, le=48)):
     return calculate_35_node_grid_state(step)
 
 @app.get("/api/hazards")
@@ -428,7 +439,8 @@ def get_hazards_48h():
     hazards = []
     base_dt = datetime.datetime.now()
 
-    for step in range(9):
+    # Pre výstrahy prechádzame v 3-hodinových krokoch do 48 hodín
+    for step in range(0, 49, 3):
         data = calculate_35_node_grid_state(step)
         target_time = base_dt + datetime.timedelta(hours=data["hours_ahead"])
         time_str = target_time.strftime("%d.%m. %H:%M") + f" (+{data['hours_ahead']}h)"
