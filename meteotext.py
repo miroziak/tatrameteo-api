@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 app = FastAPI(
     title="METEOTEXT & TATRYS-50 | Avalanche.sk",
     description="Kompletný zoznam tatranských bodov priamo v pamäti, orografický model a PWA podpora.",
-    version="5.4.0"
+    version="5.5.0"
 )
 
 app.add_middleware(
@@ -117,7 +117,7 @@ def fetch_35_nodes_dwd():
     )
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'MeteotextMemory/5.4'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'MeteotextMemory/5.5'})
         with urllib.request.urlopen(req, timeout=12) as response:
             data = json.loads(response.read().decode())
             CACHE["matrix"] = data
@@ -129,6 +129,12 @@ def fetch_35_nodes_dwd():
 
 def calculate_grid_state(step_idx: int):
     hours_ahead = step_idx
+    
+    # Oprava: Vypočítame presný ISO čas (napr. "2026-09-02T13:00") zodpovedajúci reálnemu posunu
+    base_now = datetime.datetime.now()
+    target_datetime = base_now + datetime.timedelta(hours=hours_ahead)
+    target_str = target_datetime.strftime("%Y-%m-%dT%H:00")
+
     dwd_raw = fetch_35_nodes_dwd()
 
     dwd_t = np.zeros((7, 5))
@@ -140,7 +146,12 @@ def calculate_grid_state(step_idx: int):
 
     if dwd_raw and isinstance(dwd_raw, list) and len(dwd_raw) == 35:
         time_list = dwd_raw[0].get("hourly", {}).get("time", [])
-        data_idx = min(max(0, step_idx), len(time_list) - 1)
+        
+        # Nájdeme presný index v poli podľa reálneho času namiesto slepého indexovania step_idx
+        if target_str in time_list:
+            data_idx = time_list.index(target_str)
+        else:
+            data_idx = min(max(0, step_idx), len(time_list) - 1)
 
         idx = 0
         for j in range(5):
@@ -217,7 +228,6 @@ def api_get_location_forecast(name: str = Query(..., description="Názov lokalit
     base_now = datetime.datetime.now()
 
     for step in range(49):
-        # Výpočet reálneho dátumu a času pre každý krok
         target_datetime = base_now + datetime.timedelta(hours=step)
         v_date = target_datetime.strftime("%d.%m.")
         v_time = target_datetime.strftime("%H:00")
@@ -248,13 +258,13 @@ def get_manifest():
 def get_sw():
     return FileResponse("sw.js", media_type="application/javascript")
 
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
-
 @app.get("/")
 def read_root():
     return {"status": "ok", "service": "Meteotext Memory API"}
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
 
 if __name__ == "__main__":
     import uvicorn
