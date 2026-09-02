@@ -45,7 +45,7 @@ def fetch_soap_data(method_name: str, extra_params: str = ""):
             series_map = {}
             items = []
             
-            # NOVÉ: Prečítanie XML hlavičky, aby sme vedeli, či je value1 aFRR+ atď.
+            # Prečítanie XML hlavičky pre názvy sérií (aFRR+, mFRR atď.)
             for elem in root.iter():
                 if elem.tag.endswith('serie'):
                     s_id = elem.attrib.get('id')
@@ -58,7 +58,6 @@ def fetch_soap_data(method_name: str, extra_params: str = ""):
                 if elem.tag.endswith('item'):
                     items.append(elem.attrib)
                     
-            # Backend teraz pošle aj slovník s názvami sérií
             return {"series": series_map, "items": items}
         else:
             raise HTTPException(status_code=response.status_code, detail=f"Chyba API: {response.text}")
@@ -76,6 +75,6 @@ def get_ceps_data(metric: str):
         return fetch_soap_data("AktivaceSVRvCR", params)
     elif metric == "cena-re":
         params = "<agregation>MI</agregation><function>AVG</function>"
-        return fetch_soap_data("RegulationEnergy", params)
+        return fetch_soap_data("AktualniCenaRE", params)
     else:
         raise HTTPException(status_code=404, detail="Neznáma metrika")
