@@ -21,7 +21,7 @@ app.add_middleware(
         "http://www.avalanche.sk",
         "https://avalanche.sk",
         "http://avalanche.sk",
-        "http://localhost:3000",
+        "https://www.avalanche.sk/text/",
         "http://localhost:8000",
         "*"  # Povolené pre externé aplikácie
     ],
