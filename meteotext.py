@@ -130,10 +130,10 @@ def fetch_35_nodes_dwd():
 def calculate_grid_state(step_idx: int):
     hours_ahead = step_idx
     
-    # Oprava: Vypočítame presný ISO čas (napr. "2026-09-02T13:00") zodpovedajúci reálnemu posunu
-    base_now = datetime.datetime.now()
-    target_datetime = base_now + datetime.timedelta(hours=hours_ahead)
-    target_str = target_datetime.strftime("%Y-%m-%dT%H:00")
+    # Použijeme UTC čas pre zhodu s DWD modelom (lebo DWD ICON primárne indexuje v UTC)
+    base_now_utc = datetime.datetime.now(datetime.timezone.utc)
+    target_datetime_utc = base_now_utc + datetime.timedelta(hours=hours_ahead)
+    target_str = target_datetime_utc.strftime("%Y-%m-%dT%H:00") # napr. "2026-09-02T10:00" UTC
 
     dwd_raw = fetch_35_nodes_dwd()
 
