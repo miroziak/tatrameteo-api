@@ -4,7 +4,7 @@ import requests
 from datetime import datetime
 import xml.etree.ElementTree as ET
 
-app = FastAPI(title="Avalanche Trade ČEPS API")
+app = FastAPI(title="Avalanche Trade ČEPS & OTE API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -76,5 +76,17 @@ def get_ceps_data(metric: str):
     elif metric == "cena-re":
         params = "<agregation>MI</agregation><function>AVG</function>"
         return fetch_soap_data("AktualniCenaRE", params)
+    elif metric == "vnitrodenni-trh":
+        # Pridaná podpora pre vnitrodenní trh (aktuálne pripravená štruktúra / mock pre dashboard)
+        # Sem môžete neskôr doplniť reálne sťahovanie/parsovanie dát z OTE alebo verejných zdrojov
+        return {
+            "series": {
+                "vdt_cena": "Váž. prům. cena VDT (EUR/MWh)",
+                "vdt_objem": "Zobchodovaný objem (MWh)"
+            },
+            "items": [
+                {"time": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), "vdt_cena": 85.50, "vdt_objem": 124.5}
+            ]
+        }
     else:
         raise HTTPException(status_code=404, detail="Neznáma metrika")
