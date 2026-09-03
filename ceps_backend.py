@@ -68,37 +68,33 @@ def get_ceps_data(metric: str):
 ob = Obsyd()
 
 @app.get("/api/obsyd/{metric}/{zone}")
-def get_obsyd_data(metric: str, zone: str, date: str = None):
-    """
-    date: YYYY-MM-DD (ak nie je zadaný, použije sa dnešok)
-    """
+def obsyd_endpoint(metric: str, zone: str, date: str = None):
     try:
-        series_map = {
-            "dayahead": "price.dayahead",
-            "dayahead-qh": "price.dayahead.qh",
-            "load": "load.actual",
-            "flows": "flows.crossborder"
-        }
-        series_name = series_map.get(metric, "price.dayahead")
-        
-        target_date = date if date else datetime.utcnow().strftime("%Y-%m-%d")
+        from datetime import datetime
+        target_date = date if date else datetime.now().strftime("%Y-%m-%d")
         start_ts = f"{target_date} 00:00:00"
         end_ts = f"{target_date} 23:59:59"
+
+        series_name = "price.dayahead"
+        if metric == "dayahead-qh":
+            series_name = "price.dayahead.qh"
+        elif metric == "load":
+            series_name = "load.actual"
+        elif metric == "flows":
+            series_name = "flows.crossborder"
 
         if metric == "genmix":
             df = ob.genmix(zone, resolution="hourly")
         else:
             df = ob.series(series_name, zone, start=start_ts, end=end_ts)
-        
+
         records = df.reset_index().to_dict(orient="records")
-        
-        # Striktný filter na 1 deň priamo na backende
-        filtered = []
-        for r in records:
-            t_str = str(r.get("time") or r.get("date") or r.get("timestamp") or list(r.values())[0])
-            if target_date in t_str:
-                filtered.append(r)
-        
+
+        # Striktný filter na vybraný deň
+        filtered = [
+            r for r in records
+            if target_date in str(r.get("time") or r.get("date") or r.get("timestamp") or "")
+        ]
         return filtered if filtered else records[-24:]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
