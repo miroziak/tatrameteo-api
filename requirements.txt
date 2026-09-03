@@ -16,3 +16,4 @@ xarray
 cfgrib
 obsyd
 pandas
+entsoe-py
