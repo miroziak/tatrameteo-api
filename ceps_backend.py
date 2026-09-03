@@ -190,9 +190,54 @@ def get_entsoe_prices(zone: str = "CZ", date: str = None):
 @app.get("/api/entsoe/generation/{zone}")
 def get_entsoe_generation(zone: str = "CZ", date: str = None):
     """
-    Stiahne predikciu soláru a vetra priamo z ENTSO-E.
+    Stiahne a sečte predikciu soláru a vetra priamo z ENTSO-E.
     """
     try:
         target_date = date if date else datetime.now().strftime("%Y-%m-%d")
         start = pd.Timestamp(f"{target_date} 00:00:00", tz='Europe/Brussels')
-        end = pd.Timestamp(f"{target_date} 23:59:5
+        end = pd.Timestamp(f"{target_date} 23:59:59", tz='Europe/Brussels')
+        
+        df = entsoe_client.query_wind_and_solar_forecast(zone, start=start, end=end)
+        if df is None or (isinstance(df, pd.DataFrame) and df.empty) or (isinstance(df, pd.Series) and df.empty):
+            return []
+            
+        if isinstance(df, pd.DataFrame):
+            df_sum = df.sum(axis=1).to_frame(name="value")
+        else:
+            df_sum = df.to_frame(name="value")
+            
+        df_sum = df_sum.reset_index()
+        df_sum.columns = ["time", "value"]
+        df_sum["time"] = pd.to_datetime(df_sum["time"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+        return df_sum.to_dict(orient="records")
+    except Exception as e:
+        return []
+
+
+# --- REMIT ODSTÁVKY (Reálne dáta bez fallbacku) ---
+@app.get("/api/remit/outages")
+async def get_remit_outages(zone: str = "CZ"):
+    """Vráti reálne REMIT odstávky z ENTSO-E."""
+    try:
+        target_date = datetime.now().strftime("%Y-%m-%d")
+        start = pd.Timestamp(f"{target_date} 00:00:00", tz='Europe/Brussels')
+        end = pd.Timestamp(f"{target_date} 23:59:59", tz='Europe/Brussels')
+        
+        df = entsoe_client.query_unplanned_outages_power_station(zone, start=start, end=end)
+        if df is not None and not df.empty:
+            if isinstance(df, pd.Series):
+                df = df.to_frame()
+            df = df.reset_index()
+            outages = []
+            for _, row in df.iterrows():
+                outages.append({
+                    "unit": str(row.get("dar_name", row.get("unit", "Neznáma jednotka"))),
+                    "fuel": str(row.get("fuel", "Elektráreň")),
+                    "loss_mw": float(row.get("capacity_loss", row.get("loss_mw", 0))),
+                    "period": "Aktívna odstávka / výpadok"
+                })
+            return outages
+    except Exception:
+        pass
+        
+    return []
