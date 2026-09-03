@@ -70,31 +70,42 @@ ob = Obsyd()
 @app.get("/api/obsyd/{metric}/{zone}")
 def obsyd_endpoint(metric: str, zone: str, date: str = None):
     try:
-        from datetime import datetime
         target_date = date if date else datetime.now().strftime("%Y-%m-%d")
         start_ts = f"{target_date} 00:00:00"
         end_ts = f"{target_date} 23:59:59"
 
-        series_name = "price.dayahead"
-        if metric == "dayahead-qh":
-            series_name = "price.dayahead.qh"
-        elif metric == "load":
-            series_name = "load.actual"
-        elif metric == "flows":
-            series_name = "flows.crossborder"
+        # Mapovanie sérií vrátane dopredných predikcií do budúcnosti
+        series_map = {
+            "dayahead": "price.dayahead",
+            "dayahead-qh": "price.dayahead.qh",
+            "load": "load.actual",
+            "load-forecast": "load.forecast",
+            "wind-solar-forecast": "generation.forecast.wind_solar",
+            "residual-forecast": "residual.forecast",
+            "flows": "flows.crossborder"
+        }
+        series_name = series_map.get(metric, "price.dayahead")
 
         if metric == "genmix":
             df = ob.genmix(zone, resolution="hourly")
         else:
             df = ob.series(series_name, zone, start=start_ts, end=end_ts)
 
+        if df is None or df.empty:
+            return []
+
+        # Nahradenie NaN/None hodnôt pre čistý JSON výstup
+        df = df.fillna(0)
         records = df.reset_index().to_dict(orient="records")
 
-        # Striktný filter na vybraný deň
+        # Striktný filter na požadovaný deň
         filtered = [
             r for r in records
             if target_date in str(r.get("time") or r.get("date") or r.get("timestamp") or "")
         ]
-        return filtered if filtered else records[-24:]
+
+        # Vráti len reálne dáta pre daný deň; ak pre budúci deň ešte nie sú publikované, vráti []
+        return filtered
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
