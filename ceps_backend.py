@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
+import pandas as pd
 from obsyd import Obsyd
 
 app = FastAPI(title="Avalanche Trade API – ČEPS + OBSyd")
@@ -71,10 +72,12 @@ ob = Obsyd()
 def obsyd_endpoint(metric: str, zone: str, date: str = None):
     try:
         target_date = date if date else datetime.now().strftime("%Y-%m-%d")
-        start_ts = f"{target_date} 00:00:00"
-        end_ts = f"{target_date} 23:59:59"
+        
+        # Okno s rezervou +/- 1 deň pre spoľahlivé pokrytie celého lokálneho dňa voči UTC
+        dt_target = datetime.strptime(target_date, "%Y-%m-%d")
+        start_ts = (dt_target - timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")
+        end_ts = (dt_target + timedelta(days=2)).strftime("%Y-%m-%d 23:59:59")
 
-        # Mapovanie sérií vrátane dopredných predikcií do budúcnosti
         series_map = {
             "dayahead": "price.dayahead",
             "dayahead-qh": "price.dayahead.qh",
@@ -94,18 +97,23 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
         if df is None or df.empty:
             return []
 
-        # Nahradenie NaN/None hodnôt pre čistý JSON výstup
         df = df.fillna(0)
-        records = df.reset_index().to_dict(orient="records")
+        
+        # 1. Premenovanie časového indexu na stĺpec 'time'
+        df = df.reset_index()
+        first_col = df.columns[0]
+        df.rename(columns={first_col: "time"}, inplace=True)
 
-        # Striktný filter na požadovaný deň
-        filtered = [
-            r for r in records
-            if target_date in str(r.get("time") or r.get("date") or r.get("timestamp") or "")
-        ]
+        # 2. Prevod UTC na lokálny čas
+        df["dt"] = pd.to_datetime(df["time"], utc=True)
+        df["dt_local"] = df["dt"].dt.tz_convert("Europe/Prague")
+        df["local_date"] = df["dt_local"].dt.strftime("%Y-%m-%d")
+        df["time"] = df["dt_local"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Vráti len reálne dáta pre daný deň; ak pre budúci deň ešte nie sú publikované, vráti []
-        return filtered
+        # 3. Presný filter na zvolený deň
+        df_filtered = df[df["local_date"] == target_date].drop(columns=["dt", "dt_local", "local_date"])
+
+        return df_filtered.to_dict(orient="records")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
