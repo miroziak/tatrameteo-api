@@ -69,41 +69,51 @@ def get_ceps_data(metric: str):
 ob = Obsyd()
 
 @app.get("/api/debug/find-spike")
-def find_spike(zone: str = "CZ"):
-    results = []
+def find_spike():
+    from datetime import datetime, timedelta
     
-    # Skúšame všetky existujúce názvy sérií pre cenu v OBSYD
-    price_series_list = [
+    # Nastavíme rozsah striktne od TERAZ do BUDÚCNOSTI (+45 dní)
+    dt_now = datetime.now()
+    dt_future = dt_now + timedelta(days=45)
+    start_ts = dt_now.strftime("%Y-%m-%d %H:%M:%S")
+    end_ts = dt_future.strftime("%Y-%m-%d 23:59:59")
+
+    results = []
+    zones = ["CZ", "SK", "DE_LU", "AT", "HU", "PL"]
+    
+    # Série, ktoré môžu niesť predikcie cien alebo extrémov
+    series_candidates = [
         "price.dayahead",
         "price.dayahead.qh",
         "price.forecast",
         "forecast.price.dayahead",
-        "price.fundamental_forecast"
+        "price.fundamental_forecast",
+        "residual.forecast"
     ]
-    
-    for s in price_series_list:
-        try:
-            # Stiahneme plný dostupný rozsah (minulosť aj budúcnosť)
-            df = ob.series(s, zone)
-            if df is not None and not df.empty:
-                df = df.reset_index()
-                first_col = df.columns[0]
-                val_col = df.columns[1]
 
-                # Hľadáme špičky nad 400 EUR/MWh
-                spikes = df[df[val_col] >= 400]
-                for _, row in spikes.iterrows():
-                    results.append({
-                        "series": s,
-                        "time": str(row[first_col]),
-                        "price_eur": float(row[val_col])
-                    })
-        except Exception:
-            continue
+    for z in zones:
+        for s in series_candidates:
+            try:
+                # Explicitný request do budúcnosti
+                df = ob.series(s, z, start=start_ts, end=end_ts)
+                if df is not None and not df.empty:
+                    val_col = df.columns[0]
+                    # Hľadáme hodnoty nad 500
+                    spikes = df[df[val_col] >= 500]
+                    for idx, row in spikes.iterrows():
+                        results.append({
+                            "zone": z,
+                            "series": s,
+                            "time": str(idx),
+                            "val": float(row[val_col])
+                        })
+            except Exception:
+                continue
 
     return {
+        "search_window": f"{start_ts} -> {end_ts}",
         "found_count": len(results),
-        "price_spikes": results
+        "future_spikes": results
     }
 @app.get("/api/obsyd/{metric}/{zone}")
 def obsyd_endpoint(metric: str, zone: str, date: str = None):
