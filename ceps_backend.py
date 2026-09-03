@@ -84,51 +84,50 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
     target_date = date if date else datetime.now().strftime("%Y-%m-%d")
     dt_target = datetime.strptime(target_date, "%Y-%m-%d")
 
-    # Bezpečný rozsah +/- 1 deň pre spoľahlivé pokrytie lokálneho dňa voči UTC
     start_ts = (dt_target - timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")
     end_ts = (dt_target + timedelta(days=2)).strftime("%Y-%m-%d 23:59:59")
 
     df = None
+    df_solar = None
+    df_wind = None
 
-    if metric == "genmix":
-      df = ob.genmix(zone, resolution="hourly")
-    elif metric == "wind-solar-forecast":
-      # OZE: Skúsime stiahnuť solár a vietor a zlúčiť ich sumu
-      df_solar = None
-      df_wind = None
+    if metric == "wind-solar-forecast-split":
+      # Vráti oddelene solár aj vietor pre možnosť dvoch kriviek v grafe
       try:
-        df_solar = ob.series(
-            "generation.forecast.solar", zone, start=start_ts, end=end_ts
-        )
+        df_solar = ob.series("generation.forecast.solar", zone, start=start_ts, end=end_ts)
       except Exception:
         pass
       try:
-        df_wind = ob.series(
-            "generation.forecast.wind_onshore", zone, start=start_ts, end=end_ts
-        )
+        df_wind = ob.series("generation.forecast.wind_onshore", zone, start=start_ts, end=end_ts)
       except Exception:
         pass
-
+      
+      # Vytvoríme spoločný dataframe s dvoma stĺpcami
       if df_solar is not None and df_wind is not None:
-        df = df_solar.add(df_wind, fill_value=0)
+        df = pd.DataFrame({"solar": df_solar.iloc[:, 0], "wind": df_wind.iloc[:, 0]})
       elif df_solar is not None:
-        df = df_solar
+        df = pd.DataFrame({"solar": df_solar.iloc[:, 0], "wind": 0})
       elif df_wind is not None:
-        df = df_wind
+        df = pd.DataFrame({"solar": 0, "wind": df_wind.iloc[:, 0]})
       else:
-        # Záložný pokus o agregovaný forecast
-        try:
-          df = ob.series(
-              "generation.forecast", zone, start=start_ts, end=end_ts
-          )
-        except Exception:
-          df = None
+        return []
+        
+    elif metric == "generation-comparison":
+      # Príklad pre porovnanie: Plánovaná vs. Skutočná výroba (ak je dostupná)
+      try:
+        df_forecast = ob.series("generation.forecast", zone, start=start_ts, end=end_ts)
+        df_actual = ob.series("generation.actual", zone, start=start_ts, end=end_ts)
+        df = pd.DataFrame({"plan": df_forecast.iloc[:, 0], "real": df_actual.iloc[:, 0]})
+      except Exception:
+        return []
     else:
+      # Pôvodné mapovanie pre ostatné metriky
       series_map = {
           "dayahead": "price.dayahead",
           "dayahead-qh": "price.dayahead.qh",
           "load": "load.actual",
           "load-forecast": "load.forecast",
+          "wind-solar-forecast": "generation.forecast.solar", # alebo fallback
           "residual-forecast": "residual.forecast",
           "flows": "flows.crossborder",
       }
@@ -142,27 +141,20 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
       return []
 
     df = df.fillna(0)
-
-    # 1. Premenovanie časového indexu na stĺpec 'time'
     df = df.reset_index()
     first_col = df.columns[0]
     df.rename(columns={first_col: "time"}, inplace=True)
 
-    # 2. Prevod UTC na lokálny čas
     df["dt"] = pd.to_datetime(df["time"], utc=True)
     df["dt_local"] = df["dt"].dt.tz_convert("Europe/Prague")
     df["local_date"] = df["dt_local"].dt.strftime("%Y-%m-%d")
     df["time"] = df["dt_local"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
-    # 3. Presný filter na zvolený deň
-    df_filtered = df[df["local_date"] == target_date].drop(
-        columns=["dt", "dt_local", "local_date"]
-    )
+    df_filtered = df[df["local_date"] == target_date].drop(columns=["dt", "dt_local", "local_date"])
 
     return df_filtered.to_dict(orient="records")
 
   except Exception:
-    # Nikdy nevracať 500 – pri absencii dát vrátiť prázdny zoznam
     return []
 
 
