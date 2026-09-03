@@ -72,6 +72,16 @@ def get_ceps_data(metric: str):
         return fetch_soap_data(
             "AktualniCenaRE", "<agregation>MI</agregation><function>AVG</function>"
         )
+    # --- NOVÉ ČEPS METRIKY PODĽA POŽIADAVKY ---
+    elif metric == "odhad-oze":
+        return fetch_soap_data("AktualniOdhadVyrobyOZE")
+    elif metric == "vyroba":
+        return fetch_soap_data("AktualniVyroba")
+    elif metric == "plan-vyroby":
+        return fetch_soap_data("PlanVyroby")
+    elif metric == "zatizeni":
+        return fetch_soap_data("AktualniZatizeniCR")
+        
     raise HTTPException(status_code=404, detail="Neznáma metrika")
 
 
@@ -92,7 +102,6 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
         df_wind = None
 
         if metric == "wind-solar-forecast-split":
-            # Vráti oddelene solár aj vietor pre možnosť dvoch kriviek v grafe
             try:
                 df_solar = ob.series("generation.forecast.solar", zone, start=start_ts, end=end_ts)
             except Exception:
@@ -102,7 +111,6 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
             except Exception:
                 pass
             
-            # Vytvoríme spoločný dataframe s dvoma stĺpcami
             if df_solar is not None and df_wind is not None:
                 df = pd.DataFrame({"solár": df_solar.iloc[:, 0], "vietor": df_wind.iloc[:, 0]})
             elif df_solar is not None:
@@ -113,7 +121,6 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
                 return []
             
         elif metric == "generation-comparison":
-            # Porovnanie: Plánovaná vs. Skutočná výroba
             try:
                 df_forecast = ob.series("generation.forecast", zone, start=start_ts, end=end_ts)
                 df_actual = ob.series("generation.actual", zone, start=start_ts, end=end_ts)
@@ -121,7 +128,6 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
             except Exception:
                 return []
         else:
-            # Pôvodné mapovanie pre ostatné metriky
             series_map = {
                 "dayahead": "price.dayahead",
                 "dayahead-qh": "price.dayahead.qh",
