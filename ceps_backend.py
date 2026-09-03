@@ -70,50 +70,40 @@ ob = Obsyd()
 
 @app.get("/api/debug/find-spike")
 def find_spike(zone: str = "CZ"):
-    from datetime import datetime, timedelta
-    
-    # Pozeráme sa od dneška až 60 dní do BUDÚCNOSTI
-    dt_start = datetime.now()
-    dt_end = dt_start + timedelta(days=60)
-    start_ts = dt_start.strftime("%Y-%m-%d 00:00:00")
-    end_ts = dt_end.strftime("%Y-%m-%d 23:59:59")
-
     results = []
     
-    # Skontrolujeme spotovú sériu aj predikčné série
-    series_candidates = [
+    # Skúšame všetky existujúce názvy sérií pre cenu v OBSYD
+    price_series_list = [
         "price.dayahead",
+        "price.dayahead.qh",
         "price.forecast",
-        "forecast.price.dayahead"
+        "forecast.price.dayahead",
+        "price.fundamental_forecast"
     ]
     
-    for s in series_candidates:
+    for s in price_series_list:
         try:
-            # 1. Skúsime s budúcim oknom
-            df = ob.series(s, zone, start=start_ts, end=end_ts)
-            if df is None or df.empty:
-                # 2. Ak s oknom nič nevráti, skúsime bez ohraničenia (ako to bolo pôvodne)
-                df = ob.series(s, zone)
-
+            # Stiahneme plný dostupný rozsah (minulosť aj budúcnosť)
+            df = ob.series(s, zone)
             if df is not None and not df.empty:
                 df = df.reset_index()
                 first_col = df.columns[0]
                 val_col = df.columns[1]
 
-                # Hľadáme predikované hodnoty nad 500 EUR
-                spikes = df[df[val_col] >= 500]
+                # Hľadáme špičky nad 400 EUR/MWh
+                spikes = df[df[val_col] >= 400]
                 for _, row in spikes.iterrows():
                     results.append({
                         "series": s,
                         "time": str(row[first_col]),
-                        "price": float(row[val_col])
+                        "price_eur": float(row[val_col])
                     })
         except Exception:
             continue
 
     return {
         "found_count": len(results),
-        "future_spikes": results
+        "price_spikes": results
     }
 @app.get("/api/obsyd/{metric}/{zone}")
 def obsyd_endpoint(metric: str, zone: str, date: str = None):
