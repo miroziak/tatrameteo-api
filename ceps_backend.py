@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
+from entsoe import EntsoePandasClient
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
@@ -7,7 +8,7 @@ from obsyd import Obsyd
 import pandas as pd
 import requests
 
-app = FastAPI(title="Avalanche Trade API – ČEPS + OBSyd + REMIT")
+app = FastAPI(title="Avalanche Trade API – ČEPS + OBSYD + REMIT + ENTSO-E")
 
 app.add_middleware(
     CORSMiddleware,
@@ -18,6 +19,10 @@ app.add_middleware(
 )
 
 SOAP_URL = "https://www.ceps.cz/_layouts/CepsData.asmx"
+
+# --- INICIALIZÁCIA ENTSO-E KLIENTA S VAŠÍM TOKENOM ---
+ENTSOE_TOKEN = "1c0c3de1-23e5-4368-9f7c-16343d219a52"
+entsoe_client = EntsoePandasClient(api_key=ENTSOE_TOKEN)
 
 
 def fetch_soap_data(method_name: str, extra_params: str = ""):
@@ -72,6 +77,16 @@ def get_ceps_data(metric: str):
         return fetch_soap_data(
             "AktualniCenaRE", "<agregation>MI</agregation><function>AVG</function>"
         )
+    # --- ČEPS METRIKY PODĽA POŽIADAVKY ---
+    elif metric == "odhad-oze":
+        return fetch_soap_data("AktualniOdhadVyrobyOZE")
+    elif metric == "vyroba":
+        return fetch_soap_data("AktualniVyroba")
+    elif metric == "plan-vyroby":
+        return fetch_soap_data("PlanVyroby")
+    elif metric == "zatizeni":
+        return fetch_soap_data("AktualniZatizeniCR")
+        
     raise HTTPException(status_code=404, detail="Neznáma metrika")
 
 
@@ -92,7 +107,6 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
         df_wind = None
 
         if metric == "wind-solar-forecast-split":
-            # Vráti oddelene solár aj vietor pre možnosť dvoch kriviek v grafe
             try:
                 df_solar = ob.series("generation.forecast.solar", zone, start=start_ts, end=end_ts)
             except Exception:
@@ -102,7 +116,6 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
             except Exception:
                 pass
             
-            # Vytvoríme spoločný dataframe s dvoma stĺpcami
             if df_solar is not None and df_wind is not None:
                 df = pd.DataFrame({"solár": df_solar.iloc[:, 0], "vietor": df_wind.iloc[:, 0]})
             elif df_solar is not None:
@@ -113,7 +126,6 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
                 return []
             
         elif metric == "generation-comparison":
-            # Porovnanie: Plánovaná vs. Skutočná výroba
             try:
                 df_forecast = ob.series("generation.forecast", zone, start=start_ts, end=end_ts)
                 df_actual = ob.series("generation.actual", zone, start=start_ts, end=end_ts)
@@ -121,7 +133,6 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
             except Exception:
                 return []
         else:
-            # Pôvodné mapovanie pre ostatné metriky
             series_map = {
                 "dayahead": "price.dayahead",
                 "dayahead-qh": "price.dayahead.qh",
@@ -155,6 +166,51 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
         return df_filtered.to_dict(orient="records")
 
     except Exception:
+        return []
+
+
+# --- NOVÉ ENTSO-E ENDPOINTY S VAŠÍM TOKENOM ---
+
+@app.get("/api/entsoe/prices/{zone}")
+def get_entsoe_prices(zone: str = "CZ", date: str = None):
+    """
+    Stiahne Day-ahead ceny priamo z ENTSO-E Transparency Platform.
+    """
+    try:
+        target_date = date if date else datetime.now().strftime("%Y-%m-%d")
+        start = pd.Timestamp(f"{target_date} 00:00:00", tz='Europe/Brussels')
+        end = pd.Timestamp(f"{target_date} 23:59:59", tz='Europe/Brussels')
+        
+        df = entsoe_client.query_day_ahead_prices(zone, start=start, end=end)
+        if df is None or df.empty:
+            return []
+            
+        df = df.reset_index()
+        df.columns = ["time", "price"]
+        df["time"] = pd.to_datetime(df["time"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+        return df.to_dict(orient="records")
+    except Exception as e:
+        return []
+
+
+@app.get("/api/entsoe/generation/{zone}")
+def get_entsoe_generation(zone: str = "CZ", date: str = None):
+    """
+    Stiahne predikciu soláru a vetra alebo genmix priamo z ENTSO-E.
+    """
+    try:
+        target_date = date if date else datetime.now().strftime("%Y-%m-%d")
+        start = pd.Timestamp(f"{target_date} 00:00:00", tz='Europe/Brussels')
+        end = pd.Timestamp(f"{target_date} 23:59:59", tz='Europe/Brussels')
+        
+        df = entsoe_client.query_wind_and_solar_forecast(zone, start=start, end=end)
+        if df is None or df.empty:
+            return []
+            
+        df = df.reset_index()
+        df["time"] = pd.to_datetime(df.iloc[:, 0]).dt.strftime("%Y-%m-%d %H:%M:%S")
+        return df.to_dict(orient="records")
+    except Exception as e:
         return []
 
 
