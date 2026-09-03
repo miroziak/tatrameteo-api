@@ -68,78 +68,59 @@ def get_ceps_data(metric: str):
 
 ob = Obsyd()
 
-@app.get("/api/debug/find-spike")
-def find_spike():
-    from datetime import datetime, timedelta
-    
-    # Nastavíme rozsah striktne od TERAZ do BUDÚCNOSTI (+45 dní)
-    dt_now = datetime.now()
-    dt_future = dt_now + timedelta(days=45)
-    start_ts = dt_now.strftime("%Y-%m-%d %H:%M:%S")
-    end_ts = dt_future.strftime("%Y-%m-%d 23:59:59")
-
-    results = []
-    zones = ["CZ", "SK", "DE_LU", "AT", "HU", "PL"]
-    
-    # Série, ktoré môžu niesť predikcie cien alebo extrémov
-    series_candidates = [
-        "price.dayahead",
-        "price.dayahead.qh",
-        "price.forecast",
-        "forecast.price.dayahead",
-        "price.fundamental_forecast",
-        "residual.forecast"
-    ]
-
-    for z in zones:
-        for s in series_candidates:
-            try:
-                # Explicitný request do budúcnosti
-                df = ob.series(s, z, start=start_ts, end=end_ts)
-                if df is not None and not df.empty:
-                    val_col = df.columns[0]
-                    # Hľadáme hodnoty nad 500
-                    spikes = df[df[val_col] >= 500]
-                    for idx, row in spikes.iterrows():
-                        results.append({
-                            "zone": z,
-                            "series": s,
-                            "time": str(idx),
-                            "val": float(row[val_col])
-                        })
-            except Exception:
-                continue
-
-    return {
-        "search_window": f"{start_ts} -> {end_ts}",
-        "found_count": len(results),
-        "future_spikes": results
-    }
 @app.get("/api/obsyd/{metric}/{zone}")
 def obsyd_endpoint(metric: str, zone: str, date: str = None):
     try:
         target_date = date if date else datetime.now().strftime("%Y-%m-%d")
-        
-        # Okno s rezervou +/- 1 deň pre spoľahlivé pokrytie celého lokálneho dňa voči UTC
         dt_target = datetime.strptime(target_date, "%Y-%m-%d")
+        
+        # Bezpečný rozsah +/- 1 deň pre spoľahlivé pokrytie lokálneho dňa voči UTC
         start_ts = (dt_target - timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")
         end_ts = (dt_target + timedelta(days=2)).strftime("%Y-%m-%d 23:59:59")
 
-        series_map = {
-            "dayahead": "price.dayahead",
-            "dayahead-qh": "price.dayahead.qh",
-            "load": "load.actual",
-            "load-forecast": "load.forecast",
-            "wind-solar-forecast": "generation.forecast.wind_solar",
-            "residual-forecast": "residual.forecast",
-            "flows": "flows.crossborder"
-        }
-        series_name = series_map.get(metric, "price.dayahead")
+        df = None
 
         if metric == "genmix":
             df = ob.genmix(zone, resolution="hourly")
+        elif metric == "wind-solar-forecast":
+            # OZE: Skúsime stiahnuť solár a vietor a zlúčiť ich sumu
+            df_solar = None
+            df_wind = None
+            try:
+                df_solar = ob.series("generation.forecast.solar", zone, start=start_ts, end=end_ts)
+            except Exception:
+                pass
+            try:
+                df_wind = ob.series("generation.forecast.wind_onshore", zone, start=start_ts, end=end_ts)
+            except Exception:
+                pass
+
+            if df_solar is not None and df_wind is not None:
+                df = df_solar.add(df_wind, fill_value=0)
+            elif df_solar is not None:
+                df = df_solar
+            elif df_wind is not None:
+                df = df_wind
+            else:
+                # Záložný pokus o agregovaný forecast
+                try:
+                    df = ob.series("generation.forecast", zone, start=start_ts, end=end_ts)
+                except Exception:
+                    df = None
         else:
-            df = ob.series(series_name, zone, start=start_ts, end=end_ts)
+            series_map = {
+                "dayahead": "price.dayahead",
+                "dayahead-qh": "price.dayahead.qh",
+                "load": "load.actual",
+                "load-forecast": "load.forecast",
+                "residual-forecast": "residual.forecast",
+                "flows": "flows.crossborder"
+            }
+            series_name = series_map.get(metric, "price.dayahead")
+            try:
+                df = ob.series(series_name, zone, start=start_ts, end=end_ts)
+            except Exception:
+                df = None
 
         if df is None or df.empty:
             return []
@@ -162,5 +143,6 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
 
         return df_filtered.to_dict(orient="records")
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        # Nikdy nevracať 500 – pri absencii dát vrátiť prázdny zoznam
+        return []
