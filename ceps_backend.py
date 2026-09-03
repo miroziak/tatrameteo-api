@@ -68,6 +68,37 @@ def get_ceps_data(metric: str):
 
 ob = Obsyd()
 
+@app.get("/api/debug/find-spike")
+def find_spike(zone: str = "CZ"):
+    results = []
+    # Preveríme všetky kľúčové série
+    series_to_check = [
+        "price.dayahead",
+        "load.actual",
+        "load.forecast",
+        "flows.crossborder"
+    ]
+    for s in series_to_check:
+        try:
+            # Stiahneme plný rozsah bez filtra
+            df = ob.series(s, zone)
+            if df is not None and not df.empty:
+                val_col = df.columns[0]
+                # Hľadáme hodnoty nad 1000
+                spikes = df[df[val_col] >= 1000]
+                for idx, row in spikes.iterrows():
+                    results.append({
+                        "series": s,
+                        "time": str(idx),
+                        "value": float(row[val_col])
+                    })
+        except Exception as e:
+            continue
+
+    return {
+        "found_count": len(results),
+        "spikes": results[:30] # vráti prvých 30 nálezov
+    }
 @app.get("/api/obsyd/{metric}/{zone}")
 def obsyd_endpoint(metric: str, zone: str, date: str = None):
     try:
