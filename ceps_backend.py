@@ -128,12 +128,16 @@ def obsyd_load(zone: str, start: str = None, end: str = None):
 
 
 @app.get("/api/obsyd/genmix/{zone}")
-def obsyd_genmix(zone: str, resolution: str = "hourly"):
+def obsyd_genmix(zone: str, start: str = None, end: str = None, resolution: str = "hourly"):
     """
-    Generation mix (rozpis výroby podľa technológií)
+    Generation mix (rozpis výroby podľa technológií) s podporou pre filter dátumu
     """
     try:
-        df = ob.genmix(zone, resolution=resolution)
+        # Ak klient podporuje start/end aj v genmix, predáme ich, inak fallback na štandard
+        if hasattr(ob, "genmix") and "start" in ob.genmix.__code__.co_varnames:
+            df = ob.genmix(zone, start=start, end=end, resolution=resolution)
+        else:
+            df = ob.genmix(zone, resolution=resolution)
         return df.reset_index().to_dict(orient="records")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
