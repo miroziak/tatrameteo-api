@@ -77,16 +77,7 @@ def get_ceps_data(metric: str):
         return fetch_soap_data(
             "AktualniCenaRE", "<agregation>MI</agregation><function>AVG</function>"
         )
-    # --- ČEPS METRIKY PODĽA POŽIADAVKY ---
-    elif metric == "odhad-oze":
-        return fetch_soap_data("AktualniOdhadVyrobyOZE")
-    elif metric == "vyroba":
-        return fetch_soap_data("AktualniVyroba")
-    elif metric == "plan-vyroby":
-        return fetch_soap_data("PlanVyroby")
-    elif metric == "zatizeni":
-        return fetch_soap_data("AktualniZatizeniCR")
-        
+    
     raise HTTPException(status_code=404, detail="Neznáma metrika")
 
 
@@ -169,7 +160,7 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
         return []
 
 
-# --- NOVÉ ENTSO-E ENDPOINTY S VAŠÍM TOKENOM ---
+# --- BEZPEČNÉ ENTSO-E ENDPOINTY ---
 
 @app.get("/api/entsoe/prices/{zone}")
 def get_entsoe_prices(zone: str = "CZ", date: str = None):
@@ -185,7 +176,7 @@ def get_entsoe_prices(zone: str = "CZ", date: str = None):
         if df is None or df.empty:
             return []
             
-        df = df.reset_index()
+        df = pd.DataFrame(df).reset_index()
         df.columns = ["time", "price"]
         df["time"] = pd.to_datetime(df["time"]).dt.strftime("%Y-%m-%d %H:%M:%S")
         return df.to_dict(orient="records")
@@ -196,7 +187,7 @@ def get_entsoe_prices(zone: str = "CZ", date: str = None):
 @app.get("/api/entsoe/generation/{zone}")
 def get_entsoe_generation(zone: str = "CZ", date: str = None):
     """
-    Stiahne predikciu soláru a vetra alebo genmix priamo z ENTSO-E.
+    Stiahne predikciu soláru a vetra priamo z ENTSO-E.
     """
     try:
         target_date = date if date else datetime.now().strftime("%Y-%m-%d")
@@ -207,7 +198,7 @@ def get_entsoe_generation(zone: str = "CZ", date: str = None):
         if df is None or df.empty:
             return []
             
-        df = df.reset_index()
+        df = pd.DataFrame(df).reset_index()
         df["time"] = pd.to_datetime(df.iloc[:, 0]).dt.strftime("%Y-%m-%d %H:%M:%S")
         return df.to_dict(orient="records")
     except Exception as e:
