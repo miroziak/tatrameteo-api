@@ -158,6 +158,54 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
         return []
 
 
+# --- NOVÉ ŠPECIALIZOVANÉ ENDPOINTY PRE DLHÉ ČASOVÉ RADY ---
+
+@app.get("/api/obsyd/load/{zone}")
+def obsyd_load(zone: str, start: str = None, end: str = None):
+    """
+    Skutočná spotreba (load.actual) s podporou pre rozsah start a end
+    """
+    try:
+        df = ob.series("load.actual", zone, start=start, end=end)
+        if df is None or df.empty:
+            return []
+        return df.reset_index().to_dict(orient="records")
+    except Exception as e:
+        return []
+
+
+@app.get("/api/obsyd/genmix/{zone}")
+def obsyd_genmix(zone: str, start: str = None, end: str = None, resolution: str = "hourly"):
+    """
+    Generation mix (rozpis výroby podľa technológií) s podporou pre filter a rozlíšenie
+    """
+    try:
+        if hasattr(ob, "genmix") and "start" in ob.genmix.__code__.co_varnames:
+            df = ob.genmix(zone, start=start, end=end, resolution=resolution)
+        else:
+            df = ob.genmix(zone, resolution=resolution)
+            
+        if df is None or df.empty:
+            return []
+        return df.reset_index().to_dict(orient="records")
+    except Exception as e:
+        return []
+
+
+@app.get("/api/obsyd/flows/{zone}")
+def obsyd_flows(zone: str, start: str = None, end: str = None):
+    """
+    Cezhraničné toky (Cross-border flows) s podporou pre rozsah start a end
+    """
+    try:
+        df = ob.series("flows.crossborder", zone, start=start, end=end)
+        if df is None or df.empty:
+            return []
+        return df.reset_index().to_dict(orient="records")
+    except Exception as e:
+        return []
+
+
 # --- REMIT ODSTÁVKY ---
 @app.get("/api/remit/outages")
 async def get_remit_outages(zone: str = "CZ"):
