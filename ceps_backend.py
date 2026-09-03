@@ -70,34 +70,50 @@ ob = Obsyd()
 
 @app.get("/api/debug/find-spike")
 def find_spike(zone: str = "CZ"):
+    from datetime import datetime, timedelta
+    
+    # Pozeráme sa od dneška až 60 dní do BUDÚCNOSTI
+    dt_start = datetime.now()
+    dt_end = dt_start + timedelta(days=60)
+    start_ts = dt_start.strftime("%Y-%m-%d 00:00:00")
+    end_ts = dt_end.strftime("%Y-%m-%d 23:59:59")
+
     results = []
-    # Preveríme všetky kľúčové série
-    series_to_check = [
+    
+    # Skontrolujeme spotovú sériu aj predikčné série
+    series_candidates = [
         "price.dayahead",
-        "load.actual",
-        "load.forecast",
-        "flows.crossborder"
+        "price.forecast",
+        "forecast.price.dayahead"
     ]
-    for s in series_to_check:
+    
+    for s in series_candidates:
         try:
-            # Stiahneme plný rozsah bez filtra
-            df = ob.series(s, zone)
+            # 1. Skúsime s budúcim oknom
+            df = ob.series(s, zone, start=start_ts, end=end_ts)
+            if df is None or df.empty:
+                # 2. Ak s oknom nič nevráti, skúsime bez ohraničenia (ako to bolo pôvodne)
+                df = ob.series(s, zone)
+
             if df is not None and not df.empty:
-                val_col = df.columns[0]
-                # Hľadáme hodnoty nad 1000
-                spikes = df[df[val_col] >= 1000]
-                for idx, row in spikes.iterrows():
+                df = df.reset_index()
+                first_col = df.columns[0]
+                val_col = df.columns[1]
+
+                # Hľadáme predikované hodnoty nad 500 EUR
+                spikes = df[df[val_col] >= 500]
+                for _, row in spikes.iterrows():
                     results.append({
                         "series": s,
-                        "time": str(idx),
-                        "value": float(row[val_col])
+                        "time": str(row[first_col]),
+                        "price": float(row[val_col])
                     })
-        except Exception as e:
+        except Exception:
             continue
 
     return {
         "found_count": len(results),
-        "spikes": results[:30] # vráti prvých 30 nálezov
+        "future_spikes": results
     }
 @app.get("/api/obsyd/{metric}/{zone}")
 def obsyd_endpoint(metric: str, zone: str, date: str = None):
