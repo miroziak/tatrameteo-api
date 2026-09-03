@@ -160,7 +160,7 @@ def obsyd_endpoint(metric: str, zone: str, date: str = None):
         return []
 
 
-# --- BEZPEČNÉ ENTSO-E ENDPOINTY ---
+# --- ENTSO-E ENDPOINTY ---
 
 @app.get("/api/entsoe/prices/{zone}")
 def get_entsoe_prices(zone: str = "CZ", date: str = None):
@@ -173,10 +173,13 @@ def get_entsoe_prices(zone: str = "CZ", date: str = None):
         end = pd.Timestamp(f"{target_date} 23:59:59", tz='Europe/Brussels')
         
         df = entsoe_client.query_day_ahead_prices(zone, start=start, end=end)
-        if df is None or df.empty:
+        if df is None or (isinstance(df, pd.DataFrame) and df.empty) or (isinstance(df, pd.Series) and df.empty):
             return []
             
-        df = pd.DataFrame(df).reset_index()
+        if isinstance(df, pd.Series):
+            df = df.to_frame()
+            
+        df = df.reset_index()
         df.columns = ["time", "price"]
         df["time"] = pd.to_datetime(df["time"]).dt.strftime("%Y-%m-%d %H:%M:%S")
         return df.to_dict(orient="records")
@@ -195,10 +198,13 @@ def get_entsoe_generation(zone: str = "CZ", date: str = None):
         end = pd.Timestamp(f"{target_date} 23:59:59", tz='Europe/Brussels')
         
         df = entsoe_client.query_wind_and_solar_forecast(zone, start=start, end=end)
-        if df is None or df.empty:
+        if df is None or (isinstance(df, pd.DataFrame) and df.empty) or (isinstance(df, pd.Series) and df.empty):
             return []
             
-        df = pd.DataFrame(df).reset_index()
+        if isinstance(df, pd.Series):
+            df = df.to_frame()
+            
+        df = df.reset_index()
         df["time"] = pd.to_datetime(df.iloc[:, 0]).dt.strftime("%Y-%m-%d %H:%M:%S")
         return df.to_dict(orient="records")
     except Exception as e:
