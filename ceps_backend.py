@@ -1,10 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
-
-# OBSyd klient
 from obsyd import Obsyd
 
 app = FastAPI(title="Avalanche Trade API – ČEPS + OBSyd")
@@ -17,17 +15,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -----------------------------
-# CEPS SOAP API
-# -----------------------------
-
 SOAP_URL = "https://www.ceps.cz/_layouts/CepsData.asmx"
 
 def fetch_soap_data(method_name: str, extra_params: str = ""):
     today = datetime.now()
     date_from = today.strftime("%Y-%m-%dT00:00:00")
     date_to = today.strftime("%Y-%m-%dT23:59:59")
-    
     soap_body = f"""<?xml version="1.0" encoding="utf-8"?>
     <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
       <soap:Body>
@@ -38,36 +31,27 @@ def fetch_soap_data(method_name: str, extra_params: str = ""):
         </{method_name}>
       </soap:Body>
     </soap:Envelope>"""
-    
     headers = {
         "Content-Type": "text/xml; charset=utf-8",
         "SOAPAction": f"https://www.ceps.cz/CepsData/{method_name}"
     }
-    
     try:
-        response = requests.post(SOAP_URL, data=soap_body, headers=headers, timeout=15)
-        if response.status_code == 200:
-            root = ET.fromstring(response.content)
-            series_map = {}
-            items = []
-            
+        r = requests.post(SOAP_URL, data=soap_body, headers=headers, timeout=15)
+        if r.status_code == 200:
+            root = ET.fromstring(r.content)
+            series_map, items = {}, []
             for elem in root.iter():
                 if elem.tag.endswith('serie'):
                     s_id = elem.attrib.get('id')
                     s_name = elem.attrib.get('name')
                     if s_id and s_name:
                         series_map[s_id] = s_name
-
-            for elem in root.iter():
-                if elem.tag.endswith('item'):
+                elif elem.tag.endswith('item'):
                     items.append(elem.attrib)
-                    
             return {"series": series_map, "items": items}
-        else:
-            raise HTTPException(status_code=response.status_code, detail=f"Chyba API: {response.text}")
+        raise HTTPException(status_code=r.status_code, detail=r.text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/api/data/{metric}")
 def get_ceps_data(metric: str):
@@ -76,80 +60,45 @@ def get_ceps_data(metric: str):
     elif metric == "systemova-odchylka":
         return fetch_soap_data("AktualniSystemovaOdchylkaCR")
     elif metric == "aktivace-svr":
-        params = "<agregation>MI</agregation><function>AVG</function><param1>all</param1>"
-        return fetch_soap_data("AktivaceSVRvCR", params)
+        return fetch_soap_data("AktivaceSVRvCR", "<agregation>MI</agregation><function>AVG</function><param1>all</param1>")
     elif metric == "cena-re":
-        params = "<agregation>MI</agregation><function>AVG</function>"
-        return fetch_soap_data("AktualniCenaRE", params)
-    else:
-        raise HTTPException(status_code=404, detail="Neznáma metrika")
-
-
-# -----------------------------
-# OBSyd API (Podľa obsyd.dev/api/docs)
-# -----------------------------
+        return fetch_soap_data("AktualniCenaRE", "<agregation>MI</agregation><function>AVG</function>")
+    raise HTTPException(status_code=404, detail="Neznáma metrika")
 
 ob = Obsyd()
 
-@app.get("/api/obsyd/dayahead/{zone}")
-def obsyd_dayahead(zone: str, start: str = None, end: str = None):
+@app.get("/api/obsyd/{metric}/{zone}")
+def get_obsyd_data(metric: str, zone: str, date: str = None):
     """
-    Day-ahead ceny (hodinové) pre zvolenú zónu (CZ, SK, DE_LU...)
-    """
-    try:
-        df = ob.series("price.dayahead", zone, start=start, end=end)
-        return df.reset_index().to_dict(orient="records")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/obsyd/dayahead-qh/{zone}")
-def obsyd_dayahead_qh(zone: str, start: str = None, end: str = None):
-    """
-    15-minútové SDAC ceny (Day-ahead quarter-hourly)
+    date: YYYY-MM-DD (ak nie je zadaný, použije sa dnešok)
     """
     try:
-        df = ob.series("price.dayahead.qh", zone, start=start, end=end)
-        return df.reset_index().to_dict(orient="records")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        series_map = {
+            "dayahead": "price.dayahead",
+            "dayahead-qh": "price.dayahead.qh",
+            "load": "load.actual",
+            "flows": "flows.crossborder"
+        }
+        series_name = series_map.get(metric, "price.dayahead")
+        
+        target_date = date if date else datetime.utcnow().strftime("%Y-%m-%d")
+        start_ts = f"{target_date} 00:00:00"
+        end_ts = f"{target_date} 23:59:59"
 
-
-@app.get("/api/obsyd/load/{zone}")
-def obsyd_load(zone: str, start: str = None, end: str = None):
-    """
-    Skutočná spotreba (load.actual)
-    """
-    try:
-        df = ob.series("load.actual", zone, start=start, end=end)
-        return df.reset_index().to_dict(orient="records")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/obsyd/genmix/{zone}")
-def obsyd_genmix(zone: str, start: str = None, end: str = None, resolution: str = "hourly"):
-    """
-    Generation mix (rozpis výroby podľa technológií) s podporou pre filter dátumu
-    """
-    try:
-        # Ak klient podporuje start/end aj v genmix, predáme ich, inak fallback na štandard
-        if hasattr(ob, "genmix") and "start" in ob.genmix.__code__.co_varnames:
-            df = ob.genmix(zone, start=start, end=end, resolution=resolution)
+        if metric == "genmix":
+            df = ob.genmix(zone, resolution="hourly")
         else:
-            df = ob.genmix(zone, resolution=resolution)
-        return df.reset_index().to_dict(orient="records")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/obsyd/flows/{zone}")
-def obsyd_flows(zone: str, start: str = None, end: str = None):
-    """
-    Cezhraničné toky (Cross-border flows)
-    """
-    try:
-        df = ob.series("flows.crossborder", zone, start=start, end=end)
-        return df.reset_index().to_dict(orient="records")
+            df = ob.series(series_name, zone, start=start_ts, end=end_ts)
+        
+        records = df.reset_index().to_dict(orient="records")
+        
+        # Striktný filter na 1 deň priamo na backende
+        filtered = []
+        for r in records:
+            t_str = str(r.get("time") or r.get("date") or r.get("timestamp") or list(r.values())[0])
+            if target_date in t_str:
+                filtered.append(r)
+        
+        return filtered if filtered else records[-24:]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
