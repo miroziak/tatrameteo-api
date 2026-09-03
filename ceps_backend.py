@@ -195,46 +195,4 @@ def get_entsoe_generation(zone: str = "CZ", date: str = None):
     try:
         target_date = date if date else datetime.now().strftime("%Y-%m-%d")
         start = pd.Timestamp(f"{target_date} 00:00:00", tz='Europe/Brussels')
-        end = pd.Timestamp(f"{target_date} 23:59:59", tz='Europe/Brussels')
-        
-        df = entsoe_client.query_wind_and_solar_forecast(zone, start=start, end=end)
-        if df is None or (isinstance(df, pd.DataFrame) and df.empty) or (isinstance(df, pd.Series) and df.empty):
-            return []
-            
-        if isinstance(df, pd.Series):
-            df = df.to_frame()
-            
-        df = df.reset_index()
-        df["time"] = pd.to_datetime(df.iloc[:, 0]).dt.strftime("%Y-%m-%d %H:%M:%S")
-        return df.to_dict(orient="records")
-    except Exception as e:
-        return []
-
-
-# --- REMIT ODSTÁVKY ---
-@app.get("/api/remit/outages")
-async def get_remit_outages(zone: str = "CZ"):
-    """Vráti aktuálne REMIT odstávky (Urgently Market Messages / výpadky blokov)."""
-    try:
-        return [
-            {
-                "unit": "Temelín Bl. 1",
-                "fuel": "Jadro",
-                "loss_mw": 1000,
-                "period": "Dnes 06:00 - 18:00",
-            },
-            {
-                "unit": "Prunéřov II",
-                "fuel": "Uhlie",
-                "loss_mw": 250,
-                "period": "Prebieha odstávka",
-            },
-            {
-                "unit": "Dětmarovice",
-                "fuel": "Plyn/Uhlie",
-                "loss_mw": 150,
-                "period": "Krátkodobý výpadok",
-            },
-        ]
-    except Exception as e:
-        return []
+        end = pd.Timestamp(f"{target_date} 23:59:5
